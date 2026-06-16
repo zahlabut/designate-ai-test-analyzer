@@ -4,6 +4,8 @@ import sys
 import re
 import time
 import importlib.util
+import urllib.error
+import urllib.request
 from datetime import datetime
 from crewai import Agent, Task, Crew
 from crewai.tools import tool
@@ -14,9 +16,36 @@ from rich.text import Text
 console = Console()
 
 # --- CONFIGURATION ---
-os.environ["OPENAI_API_BASE"] = "http://10.9.95.131:11434/v1"
-os.environ["OPENAI_MODEL_NAME"] = "ollama/llama3.1"
-os.environ["OPENAI_API_KEY"] = "ollama"
+
+def configure_llm():
+    """Configure CrewAI to use a local/remote Ollama OpenAI-compatible endpoint."""
+    base = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+    model = os.environ.get("OLLAMA_MODEL", "ollama/llama3.1")
+    os.environ.setdefault("OPENAI_API_BASE", f"{base}/v1")
+    os.environ.setdefault("OPENAI_MODEL_NAME", model)
+    os.environ.setdefault("OPENAI_API_KEY", "ollama")
+    return base, os.environ["OPENAI_MODEL_NAME"]
+
+
+def verify_llm_connection(base_url):
+    """Return (ok, error_message)."""
+    url = f"{base_url.rstrip('/')}/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            if resp.status != 200:
+                return False, f"Ollama returned HTTP {resp.status} from {url}"
+    except urllib.error.URLError as e:
+        return False, (
+            f"Cannot reach Ollama at {base_url} ({e.reason}).\n"
+            "Start Ollama on this host or set OLLAMA_BASE_URL to the machine running it, e.g.:\n"
+            "  export OLLAMA_BASE_URL=http://10.9.95.131:11434"
+        )
+    except Exception as e:
+        return False, f"Cannot reach Ollama at {base_url}: {e}"
+    return True, None
+
+
+OLLAMA_BASE, OLLAMA_MODEL = configure_llm()
 
 TEMPEST_PATH = "/opt/stack/tempest"
 BASE_HISTORY_DIR = "/opt/stack/agent_runs"
@@ -177,24 +206,47 @@ def run_stage_root_cause(logic, trace, start_time, run_dir):
 # --- MAIN ---
 
 def get_full_test_list(grep_str=None):
-    try:
-        cmd = "stestr list | grep designate | grep test_"
-        if grep_str:
-            cmd += f" | grep -i '{grep_str}'"
-        out = subprocess.check_output(cmd, shell=True, cwd=TEMPEST_PATH, stderr=subprocess.DEVNULL).decode('utf-8')
-        return [line.strip() for line in out.split('\n') if line.strip()]
-    except:
-        return []
+    """Return (tests, error). error is set when stestr discovery fails."""
+    list_result = subprocess.run(
+        ["stestr", "list"],
+        cwd=TEMPEST_PATH,
+        capture_output=True,
+        text=True,
+    )
+    if list_result.returncode != 0:
+        err = (list_result.stderr or list_result.stdout or "stestr list failed").strip()
+        return [], err
+
+    tests = [
+        line.strip() for line in list_result.stdout.splitlines()
+        if line.strip() and "designate" in line and "test_" in line
+    ]
+    if grep_str:
+        tests = [t for t in tests if grep_str.lower() in t.lower()]
+    return tests, None
 
 
 if __name__ == "__main__":
     console.print(Panel("[bold green]DESIGNATE E2E SYSTEM-AWARE INVESTIGATOR[/bold green]"))
+    console.print(f"[dim]LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE}[/dim]")
+
+    llm_ok, llm_error = verify_llm_connection(OLLAMA_BASE)
+    if not llm_ok:
+        console.print("[red]Ollama is not reachable — AI stages cannot run:[/red]")
+        console.print(Panel(Text(llm_error, style="red"), border_style="red"))
+        sys.exit(1)
 
     grep_query = input("Grep tests (e.g. 'multipool') or ENTER for all: ").strip()
-    tests = get_full_test_list(grep_query)
+    tests, stestr_error = get_full_test_list(grep_query)
+
+    if stestr_error:
+        console.print("[red]stestr list failed — Tempest test discovery is broken:[/red]")
+        console.print(Panel(Text(stestr_error, style="red"), border_style="red"))
+        sys.exit(1)
 
     if not tests:
-        console.print(f"[red]No tests found matching '{grep_query}'.[/red]")
+        label = f"'{grep_query}'" if grep_query else "designate tests"
+        console.print(f"[red]No tests found matching {label}.[/red]")
         sys.exit(1)
 
     for i, t in enumerate(tests):
