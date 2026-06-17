@@ -79,6 +79,37 @@ curl http://127.0.0.1:11434/api/tags
 
 On Noble use the full image path `docker.io/ollama/ollama` (short names may not resolve).
 
+#### Which model to pull?
+
+**`llama3.2:1b` is a small model** (~1.3 GiB download, ~1.5–2 GiB RAM while running). It is the recommended default for a **16 GiB** DevStack VM.
+
+| Model | Size | RAM (approx.) | Fits 16 GiB DevStack VM? |
+|-------|------|---------------|----------------------------|
+| `qwen2.5:0.5b` | Tiny | ~0.5–1 GiB | Yes — most headroom |
+| **`llama3.2:1b`** | **Small** | **~1.5–2 GiB** | **Yes — recommended** |
+| `llama3.2:3b` | Medium | ~2–3 GiB | Tight — may OOM under load |
+| `llama3.1` | Large | ~5 GiB | No — use 32 GiB VM or remote Ollama |
+
+Pull one (or several — the tool lets you pick at startup):
+
+```bash
+# Recommended for 16 GiB VM
+podman exec -it ollama ollama pull llama3.2:1b
+
+# Smaller / faster (less accurate)
+podman exec -it ollama ollama pull qwen2.5:0.5b
+
+# Larger VM only (32 GiB+ RAM)
+podman exec -it ollama ollama pull llama3.1
+```
+
+Optional: pin a model in `conf.ini` so startup skips the picker:
+
+```ini
+[ollama]
+model = ollama/llama3.2:1b
+```
+
 ### 3. Run
 
 ```bash
