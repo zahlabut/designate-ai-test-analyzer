@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Example output — PASS</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="nav-links">
+    <a href="../README.md">← README</a>
+    <a href="example-pass.html">PASS example</a>
+    <a href="example-fail.html">FAIL example</a>
+  </nav>
+
+  <header class="page-header">
+    <h1>Example: chosen test <span class="badge pass">PASS</span></h1>
+    <p class="meta">Test <code>test_update_records_propagated_to_backends_07_MX_under_APEX</code> — grep <code>prop</code>, index 6. Stage 3 is skipped when Tempest passes.</p>
+    <p class="meta dim">Captured on DevStack Noble with llama3.1:latest · 2026-06-17</p>
+  </header>
+
+  <main class="terminal">
+    <div class="panel panel-header">
+      <div class="panel-title">Designate E2E Test Investigator</div>
+      <div class="panel-body">Select a Tempest test → analyze intent → run → diagnose failures</div>
+    </div>
+
+    <pre class="diagram">  Setup          Stage 1              Stage 2              Stage 3
+  ─────          ───────              ───────              ───────
+  Ollama ✓   →   <span class="cyan">Analyze logic</span>   →   <span class="yellow">Run test</span>   →   <span class="magenta">Root cause</span>
+  tempest ✓      (test source)      (stestr)            (journalctl)
+                   cyan · LLM          yellow              magenta · LLM
+                                        │
+                                        ├─ PASS  → done
+                                        ├─ SKIP  → done
+                                        └─ FAIL  → Stage 3</pre>
+
+    <div class="line dim">Using Ollama model: llama3.1:latest</div>
+    <div class="line dim">LLM: ollama/llama3.1:latest @ http://127.0.0.1:11434</div>
+    <div class="line dim">Tempest config: /opt/stack/tempest/etc/tempest.conf</div>
+    <div class="line info">Grep tests (e.g. 'multipool') or ENTER for all: <strong>prop</strong></div>
+
+    <div class="list-tests">
+      <div class="line dim">Available tests (grep filter applied)</div>
+      <div>  0  designate_tempest_plugin.tests.scenario.v2.test_recordsets.RecordsetsTest.test_update_records_propagated_to_backends_01_A[…]</div>
+      <div>  …</div>
+      <div class="selected">  6  designate_tempest_plugin.tests.scenario.v2.test_recordsets.RecordsetsTest.test_update_records_propagated_to_backends_07_MX_under_APEX[id-31176def-3f95-459d-8bdd-b9994335b2d9,slow]</div>
+      <div>  …</div>
+      <div> 15  designate_tempest_plugin.tests.scenario.v2.test_zones.ZonesTest.test_zone_delete_propagates_to_nameservers[…]</div>
+    </div>
+
+    <div class="line info">Select test number [0-15]: <strong>6</strong></div>
+
+    <div class="panel panel-header">
+      <div class="panel-title">Selected test</div>
+      <div class="panel-body">designate_tempest_plugin.tests.scenario.v2.test_recordsets.RecordsetsTest.test_update_records_propagated_to_backends_07_MX_under_APEX[id-31176def-3f95-459d-8bdd-b9994335b2d9,slow]</div>
+    </div>
+
+    <div class="panel panel-cyan">
+      <div class="panel-title">Stage 1 · Analyze test logic</div>
+      <div class="panel-body">Loads the test method and helper methods it calls from source, then uses Ollama to explain the full end-to-end flow.
+Ollama (ollama/llama3.1:latest) @ http://127.0.0.1:11434
+Test: …test_update_records_propagated_to_backends_07_MX_under_APEX[…]</div>
+    </div>
+
+    <div class="panel panel-cyan">
+      <div class="panel-title">Test intent · test_update_records_propagated_to_backends_07_MX_under_APEX</div>
+      <div class="panel-body"><strong>Setup</strong>
+1. Calls <code>_test_update_records_propagated_to_backends</code> with MX record parameters.
+2. Creates a recordset (type MX, TTL 666) via <code>recordset_client.create_recordset</code>.
+3. Registers cleanup to delete the recordset after the test.
+
+<strong>Zone and Record Set Update</strong>
+1. Updates TTL from 666 to 777 via <code>recordset_client.update_recordset</code>.
+
+<strong>DNS Propagation Checks</strong>
+1. Loops over each nameserver in <code>config.CONF.dns.nameservers</code>.
+2. Issues dig queries via <code>SingleQueryClient</code> until updated TTL 777 is seen.
+3. Raises <code>TimeoutException</code> if build timeout is reached without propagation.
+
+<strong>Expected behavior</strong>
+Designate should propagate the TTL update to all configured DNS backends within the timeout.</div>
+    </div>
+
+    <div class="panel panel-yellow">
+      <div class="panel-title">Stage 2 · Run Tempest test</div>
+      <div class="panel-body">Executes the selected test with stestr against DevStack (no LLM).
+TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf
+cwd=/opt/stack/tempest
+stestr run --serial designate_tempest_plugin\.tests\.scenario\.v2\.test_recordsets\.RecordsetsTest\.test_update_records_propagated_to_backends_07_MX_under_APEX[…]</div>
+    </div>
+
+    <div class="line dim">Running… .</div>
+
+    <div class="panel panel-green">
+      <div class="panel-title">Execution result · PASS</div>
+      <div class="panel-body">Tempest reported success.
+
+Log: /opt/stack/agent_runs/run_20260617_171140/tempest_run.log
+Artifacts: /opt/stack/agent_runs/run_20260617_171140</div>
+    </div>
+
+    <div class="panel panel-summary">
+      <div class="panel-title">Run summary</div>
+      <div class="panel-body"><strong>Test:</strong> test_update_records_propagated_to_backends_07_MX_under_APEX
+
+<strong>What it checks:</strong> Setup: creates MX recordset on zone, updates TTL 666→777. DNS Propagation Check: loops dig on each nameserver until updated TTL is detected.
+
+<strong>Result:</strong> PASS — Tempest completed successfully.
+
+<strong>Artifacts:</strong> /opt/stack/agent_runs/run_20260617_171140</div>
+    </div>
+  </main>
+
+  <footer>
+    Static snapshot for documentation. Actual CLI output uses Rich panels and may vary slightly with model and test selection.
+  </footer>
+</body>
+</html>
