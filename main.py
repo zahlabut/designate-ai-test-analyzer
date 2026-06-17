@@ -49,16 +49,14 @@ OLLAMA_BASE, OLLAMA_MODEL = configure_llm()
 
 TEMPEST_PATH = "/opt/stack/tempest"
 BASE_HISTORY_DIR = "/opt/stack/agent_runs"
-DEFAULT_TEST_PATH = "designate_tempest_plugin.tests.scenario.v2.test_designate_multipool.DesignateMultiPoolTest.test_move_zone_to_another_pool"
 
 SYSTEM_CONTEXT = """
 Environment: OpenStack DevStack (All-in-one).
 Service: Designate (DNS-as-a-Service) with DNS enabled.
 Testing Tool: Tempest with designate-tempest-plugin.
-Architecture: 
+Architecture:
 - Central: Logic/DB/Pool coordination.
 - Worker: Backend sync (BIND9/PowerDNS).
-Target: Troubleshooting pool transitions and zone sync failures.
 """
 
 
@@ -101,18 +99,6 @@ analyst = Agent(
 
 
 # --- STAGE HANDLERS ---
-
-def run_stage_context_priming():
-    console.print(f"\n[bold green]🌱 STAGE 0: PRIMING SYSTEM CONTEXT...[/bold green]")
-    task = Task(
-        description=f"Internalize this architecture: {SYSTEM_CONTEXT}. Briefly explain your understanding of how a Zone Move affects the Pool ID in the backend.",
-        expected_output="A summary of the Designate pool sync architecture.",
-        agent=analyst
-    )
-    result = Crew(agents=[analyst], tasks=[task]).kickoff()
-    # CrewAI 0.28+ returns a CrewOutput object; use str() to get the result
-    console.print(Panel(Text(str(result), style="italic green"), title="AI SYSTEM UNDERSTANDING", border_style="green"))
-
 
 def run_stage_logic_discovery(test_path):
     console.print(f"\n[bold blue]🔎 STAGE 1: ANALYZING TEST LOGIC...[/bold blue]")
@@ -226,6 +212,19 @@ def get_full_test_list(grep_str=None):
     return tests, None
 
 
+def prompt_test_selection(tests):
+    """Require the user to pick a test index from the displayed list."""
+    while True:
+        choice = input(f"\nSelect test number [0-{len(tests) - 1}]: ").strip()
+        if not choice.isdigit():
+            console.print("[yellow]Enter a number from the list.[/yellow]")
+            continue
+        idx = int(choice)
+        if 0 <= idx < len(tests):
+            return tests[idx]
+        console.print(f"[yellow]Invalid index — use 0 to {len(tests) - 1}.[/yellow]")
+
+
 if __name__ == "__main__":
     console.print(Panel("[bold green]DESIGNATE E2E SYSTEM-AWARE INVESTIGATOR[/bold green]"))
     console.print(f"[dim]LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE}[/dim]")
@@ -252,11 +251,9 @@ if __name__ == "__main__":
     for i, t in enumerate(tests):
         print(f"[{i}] {t}")
 
-    choice = input(f"\nSelect test number (ENTER for default Multipool): ").strip()
-    target_test = tests[int(choice)] if choice.isdigit() and int(choice) < len(tests) else DEFAULT_TEST_PATH
+    target_test = prompt_test_selection(tests)
+    console.print(f"\n[bold]Selected:[/bold] {target_test}")
 
-    # STAGES
-    run_stage_context_priming()
     logic_summary = run_stage_logic_discovery(target_test)
     status, traceback, start_time, run_dir = run_stage_execution(target_test)
 

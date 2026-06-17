@@ -6,28 +6,88 @@ Autonomous diagnostic agent for OpenStack Designate Tempest failures. It reads t
 
 ---
 
-## DevStack setup (full walkthrough)
+## VM hardware requirements (DevStack + Ollama on same host)
 
-These steps were validated on Ubuntu Noble DevStack (`devstack-noble`), running directly from system Python (no Tempest venv).
+DevStack and Ollama compete for the same RAM. An **8 GiB / 2 vCPU** VM can run Tempest, but will fail to load `llama3.1` locally (Ollama reported ~4.8 GiB needed while only ~1.3 GiB was free with DevStack running).
 
-### 1. Clone and install Python dependencies
+### Recommended VM sizes
 
-```bash
-cd /opt/stack
-git clone https://github.com/zahlabut/designate-ai-test-analyzer.git
-cd designate-ai-test-analyzer
+| Scenario | RAM | vCPU | Disk | Swap |
+|----------|-----|------|------|------|
+| DevStack only, Ollama on **another host** | 12–16 GiB (16,384 MiB) | 4 | 60–80 GiB | 4–8 GiB |
+| DevStack + **small local model** (`llama3.2:1b`, `qwen2.5:0.5b`) | **16 GiB** (16,384 MiB) | 4 | 80 GiB | 8 GiB |
+| DevStack + **`llama3.1` locally** | 24–32 GiB | 8 | 100 GiB | 8–16 GiB |
 
-python3 -m pip install -r requirements.txt --break-system-packages
+**Minimum not recommended:** 8 GiB RAM / 2 vCPU / 40 GiB disk — workable for DevStack alone, not for local LLM inference.
+
+### RAM budget (rough)
+
+```
+DevStack (Designate, Neutron, MySQL, Nova, …)  →  6–8 GiB
+Ollama daemon                                   →  ~0.5 GiB
+Model at runtime:
+  qwen2.5:0.5b / tinyllama                       →  ~0.5–1 GiB
+  llama3.2:1b                                    →  ~1.5–2 GiB
+  llama3.1                                       →  ~5 GiB
+Headroom (Tempest runs, OS cache)               →  2–4 GiB
 ```
 
-On Noble, `--break-system-packages` is usually required when installing into the system Python alongside apt packages.
+**Rule of thumb:** `RAM ≈ 8 GiB + model size + 2–4 GiB headroom`
 
-### 2. Fix Tempest / `stestr list` (if discovery fails)
+### Disk
 
-If `stestr list` fails with an OpenSSL error such as `AttributeError: module 'lib' has no attribute 'GEN_EMAIL'`, upgrade the crypto stack for the same `python3` that runs Tempest:
+| Component | Space |
+|-----------|-------|
+| DevStack base (OS, packages, logs) | ~25–35 GiB |
+| OpenStack images/volumes over time | +10–20 GiB |
+| Ollama models | 1–5 GiB per model |
+| Tempest / plugin / agent artifacts | ~2–5 GiB |
+
+Plan **80 GiB** minimum when keeping models on the same VM.
+
+### Check if your VM is big enough
 
 ```bash
-python3 -m pip install --upgrade pyOpenSSL cryptography --break-system-packages
+free -h
+grep -E 'MemTotal|MemAvailable|SwapTotal' /proc/meminfo
+nproc
+df -h /
+ps aux --sort=-%mem | head -10
+```
+
+| Reading | Concern |
+|---------|---------|
+| `available` < 2 GiB | Too tight for any local model |
+| `SwapTotal` = 0 | No buffer when RAM fills — add swap |
+| Disk > 85% full | Model pulls may fail |
+| Only 2 vCPU | LLM inference will be slow |
+
+### Model choice vs available RAM
+
+| Model | Approx. RAM to load | Fits on 16 GiB DevStack VM? |
+|-------|-------------------|----------------------------|
+| `qwen2.5:0.5b` | ~0.5–1 GiB | Yes (best margin) |
+| `llama3.2:1b` | ~1.5–2 GiB | Yes |
+| `llama3.1` | ~5 GiB | No — use remote Ollama or 32 GiB VM |
+
+Set the model via environment variable:
+
+```bash
+export OLLAMA_MODEL=ollama/llama3.2:1b
+```
+
+---
+
+## DevStack setup (full walkthrough)
+
+These steps were validated on Ubuntu Noble DevStack (`devstack-noble-new`), using the **DevStack Tempest venv**. Activate it once per SSH session before `stestr`, `pip install`, or `main.py` — your shell prompt should show `(venv)`.
+
+### 1. Activate the DevStack venv
+
+```bash
+ssh stack@<VM_IP>    # password: stack
+
+source /opt/stack/data/venv/bin/activate
 ```
 
 Verify Tempest discovery works:
@@ -37,13 +97,61 @@ cd /opt/stack/tempest
 stestr list | grep designate | head
 ```
 
-### 3. Install Podman
+### 2. Clone and install Python dependencies
+
+Stay in the same session with the venv active:
+
+```bash
+cd /opt/stack
+git clone https://github.com/zahlabut/designate-ai-test-analyzer.git
+cd designate-ai-test-analyzer
+
+pip install -r requirements.txt
+```
+
+Do **not** use system Python or `--break-system-packages` — install into the DevStack venv.
+
+### 3. Fix Tempest / `stestr list` (if discovery fails)
+
+If `stestr list` fails with an OpenSSL error such as `AttributeError: module 'lib' has no attribute 'GEN_EMAIL'`, upgrade the crypto stack **in the venv**:
+
+```bash
+source /opt/stack/data/venv/bin/activate
+pip install --upgrade pyOpenSSL cryptography
+cd /opt/stack/tempest
+stestr list | grep designate | head
+```
+
+### 4. Install and run Ollama
+
+Ollama provides the local LLM. It can run **natively** (system service) or in **Podman** — use one, not both on port 11434.
+
+#### Check for an existing Ollama instance first
+
+```bash
+ss -tlnp | grep 11434
+curl -s http://127.0.0.1:11434/api/tags
+ps aux | grep '[o]llama serve'
+podman ps -a
+```
+
+If `curl` returns model JSON, Ollama is already running — skip installation and go to [pull a model](#pull-a-model).
+
+#### Option A: Native Ollama (recommended on DevStack)
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+sudo systemctl enable --now ollama
+curl -s http://127.0.0.1:11434/api/tags
+```
+
+#### Option B: Ollama via Podman
+
+Install Podman:
 
 ```bash
 sudo apt install podman
 ```
-
-### 4. Run Ollama locally via Podman
 
 On Ubuntu Noble, Podman does **not** resolve short image names like `ollama/ollama`. Use the full registry path:
 
@@ -57,21 +165,7 @@ podman run -d \
   docker.io/ollama/ollama
 ```
 
-Pull a model into the container:
-
-```bash
-podman exec -it ollama ollama pull llama3.1
-```
-
-Verify Ollama is responding:
-
-```bash
-curl http://127.0.0.1:11434/api/tags
-```
-
-You should see JSON listing at least one model.
-
-#### Optional: allow short image names in Podman
+Optional — allow short image names in Podman:
 
 ```bash
 sudo tee /etc/containers/registries.conf.d/docker.conf <<'EOF'
@@ -79,9 +173,42 @@ unqualified-search-registries = ["docker.io"]
 EOF
 ```
 
-After this, `ollama/ollama` works without the `docker.io/` prefix.
+#### Pull a model
 
-### 5. Troubleshooting Ollama / Podman
+Choose a model that fits your VM RAM (see [hardware requirements](#vm-hardware-requirements-devstack--ollama-on-same-host)). On a **16 GiB** DevStack VM, prefer a small model:
+
+```bash
+# Native Ollama
+ollama pull llama3.2:1b
+
+# Or via HTTP API (works for native or Podman)
+curl -X POST http://127.0.0.1:11434/api/pull -d '{"name":"llama3.2:1b"}'
+
+# Podman
+podman exec -it ollama ollama pull llama3.2:1b
+```
+
+Verify:
+
+```bash
+curl http://127.0.0.1:11434/api/tags
+```
+
+You should see JSON listing at least one model.
+
+```bash
+export OLLAMA_MODEL=ollama/llama3.2:1b
+```
+
+### 5. Troubleshooting Ollama
+
+#### `model requires more system memory than is available`
+
+The VM is too small for the chosen model with DevStack running. Either:
+
+- Switch to a smaller model: `export OLLAMA_MODEL=ollama/llama3.2:1b`
+- Run Ollama on a remote host with more RAM (see [hardware requirements](#vm-hardware-requirements-devstack--ollama-on-same-host))
+- Resize the VM to 16+ GiB RAM
 
 #### `bind: address already in use` on port 11434
 
@@ -93,7 +220,7 @@ curl -s http://127.0.0.1:11434/api/tags
 podman ps -a
 ```
 
-- **If `curl` returns model JSON** — Ollama is already up. Skip `podman run` and go to step 6.
+- **If `curl` returns model JSON** — Ollama is already up (often a native `ollama serve`). Skip `podman run`, remove any dead container with `podman rm -f ollama`, and pull models via `ollama pull` or the HTTP API.
 - **If you need a fresh Podman container** — remove the failed one, free the port, then re-run:
 
 ```bash
@@ -127,13 +254,16 @@ The container failed to start (often due to a port conflict). Run `podman ps -a`
 #### Smaller model (limited RAM)
 
 ```bash
-podman exec -it ollama ollama pull llama3.2:1b
+curl -X POST http://127.0.0.1:11434/api/pull -d '{"name":"llama3.2:1b"}'
 export OLLAMA_MODEL=ollama/llama3.2:1b
 ```
 
 ### 6. Run the analyzer
 
+With the DevStack venv still active:
+
 ```bash
+source /opt/stack/data/venv/bin/activate
 cd /opt/stack/designate-ai-test-analyzer
 python3 main.py
 ```
@@ -156,8 +286,10 @@ The script checks Ollama connectivity before starting AI stages. If it fails, fi
 Example — Ollama on a remote host:
 
 ```bash
+source /opt/stack/data/venv/bin/activate
 export OLLAMA_BASE_URL=http://10.9.95.131:11434
 export OLLAMA_MODEL=ollama/llama3.1
+cd /opt/stack/designate-ai-test-analyzer
 python3 main.py
 ```
 
@@ -167,10 +299,12 @@ python3 main.py
 
 | Requirement | Notes |
 |-------------|-------|
+| VM sizing | See [hardware requirements](#vm-hardware-requirements-devstack--ollama-on-same-host) — **16 GiB RAM** minimum for local small model |
 | DevStack with Designate | DNS enabled, central + worker running |
+| DevStack venv | `source /opt/stack/data/venv/bin/activate` before `stestr` and `main.py` |
 | `designate-tempest-plugin` | Installed in Tempest environment |
-| `stestr list` working | See crypto fix in step 2 if discovery fails |
-| Ollama | Local Podman container or remote instance |
+| `stestr list` working | See crypto fix in step 3 if discovery fails |
+| Ollama | Native install, Podman container, or remote instance |
 | `sudo` | Required for `journalctl` log extraction in Stage 3 |
 
 ---
@@ -178,13 +312,14 @@ python3 main.py
 ## Usage
 
 ```bash
+source /opt/stack/data/venv/bin/activate
+cd /opt/stack/designate-ai-test-analyzer
 python3 main.py
 ```
 
 1. **Grep tests** — enter a filter (e.g. `recordset`, `multipool`) or press ENTER for all designate tests.
-2. **Select test** — enter the index number, or press ENTER for the default multipool test.
+2. **Select test** — enter the index number from the list (required).
 3. **Autonomous stages:**
-   - **Stage 0: Context priming** — AI internalizes Designate Central/Worker architecture.
    - **Stage 1: Logic discovery** — AI reads test source and explains intent step by step.
    - **Stage 2: Execution** — runs `stestr run <test>`, saves output to `/opt/stack/agent_runs/run_<timestamp>/`.
    - **Stage 3: Root cause** (on failure only) — fetches `journalctl` logs and produces a technical verdict.
