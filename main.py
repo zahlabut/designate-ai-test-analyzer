@@ -483,7 +483,8 @@ def build_log_evidence_report(
         sections.append(summarize_log_section("Tempest run log", tempest_full))
 
     for service in sorted(service_logs):
-        sections.append(summarize_log_section(f"designate-{service}", service_logs[service]))
+        title = service if service.startswith("designate-") else f"designate-{service}"
+        sections.append(summarize_log_section(title, service_logs[service]))
 
     return "\n".join(sections)
 
@@ -1020,6 +1021,107 @@ def brief_text(text: str, max_len: int = 350) -> str:
     return cut + "…"
 
 
+def summarize_intent(logic: str) -> str:
+    """
+    Why: LLM output often starts with 'Here's a step-by-step…' — useless in a summary.
+    What: Strips boilerplate and builds a short plain-text description of the test flow.
+    """
+    skip_line = re.compile(
+        r"^(Here'?s|Here is|Based on|The following|Sure,?|Certainly|I will)",
+        re.I,
+    )
+    parts: list[str] = []
+    for line in logic.splitlines():
+        line = line.strip()
+        if not line or skip_line.match(line):
+            continue
+        header = re.match(r"^\*\*(.+?)\*\*$", line)
+        if header:
+            parts.append(header.group(1) + ":")
+            continue
+        line = re.sub(r"^\d+\.\s*", "", line)
+        line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+        parts.append(line)
+        if len(" ".join(parts)) >= 380:
+            break
+    text = " ".join(parts)
+    return brief_text(text, 450) if text else brief_text(logic, 450)
+
+
+def summarize_root_cause(verdict: str) -> str:
+    """
+    Why: Stage 3 LLM replies are long; the summary needs the conclusion only.
+    What: Extracts the 'most likely root cause' section or the last substantive paragraph.
+    """
+    if not verdict or not verdict.strip():
+        return "No root-cause analysis available."
+
+    for pattern in (
+        r"\*\*4\.\s*Most likely root cause[^*]*\*\*\s*(.*?)(?:\n\n\*\*|\Z)",
+        r"Most likely root cause[^:\n]*:?\s*(.*?)(?:\n\n|\Z)",
+    ):
+        match = re.search(pattern, verdict, re.DOTALL | re.I)
+        if match:
+            text = re.sub(r"\*\*([^*]+)\*\*", r"\1", match.group(1).strip())
+            text = re.sub(r"\s+", " ", text)
+            if len(text) > 40:
+                return brief_text(text, 550)
+
+    skip_para = re.compile(r"^(Based on|Here|\*\*[123]\.)", re.I)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", verdict) if p.strip()]
+    for paragraph in reversed(paragraphs):
+        if skip_para.match(paragraph):
+            continue
+        clean = re.sub(r"\*\*([^*]+)\*\*", r"\1", paragraph)
+        clean = re.sub(r"\s+", " ", clean)
+        if len(clean) > 40:
+            return brief_text(clean, 550)
+    return brief_text(verdict, 550)
+
+
+def failure_context_hint(detail: str) -> str | None:
+    """
+    Why: Some failures have an obvious config cause before reading LLM verdict.
+    What: Returns a short hint for common patterns (e.g. DNS dig timeout + wrong port).
+    """
+    if not re.search(r"dns\.exception\.Timeout|TimeoutException", detail):
+        return None
+    hint = (
+        "Client-side DNS dig timed out during the propagation check — "
+        "the test never saw the updated record on the configured nameservers."
+    )
+    dns_cfg = read_tempest_dns_config()
+    if dns_cfg:
+        flat = dns_cfg.replace("\n", " ").strip()
+        hint += f" tempest.conf: {flat}."
+        if re.search(r"nameservers\s*=\s*[^\n]*:(?!53\b)\d+", dns_cfg):
+            hint += " Check that the port matches BIND (usually 53, not 533/54)."
+    return hint
+
+
+def backend_logs_hint(run_dir: str) -> str | None:
+    """One-line summary from log_evidence.txt about Designate service logs."""
+    path = os.path.join(run_dir, "log_evidence.txt")
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    clean = re.findall(r"=== (designate-[\w-]+) ===[^=]*?no errors detected", content)
+    noisy = re.findall(
+        r"=== (designate-[\w-]+) ===[^=]*?(\d+) error excerpt",
+        content,
+    )
+    noisy_names = [n for n, count in noisy if int(count) > 0 and n not in clean]
+    if clean and not noisy_names:
+        return f"Designate logs ({len(clean)} services): no backend errors detected."
+    if clean and noisy_names:
+        return (
+            f"Designate logs: no errors in {', '.join(clean)}; "
+            f"review {', '.join(noisy_names)} in log_evidence.txt."
+        )
+    return None
+
+
 def failure_one_liner(detail: str) -> str:
     """
     Why: The summary needs one line for Stage 2 failure, not the full traceback.
@@ -1049,22 +1151,33 @@ def print_run_summary(
 
     lines = [
         f"Test: {test_method_name(test_path)}",
-        f"Intent: {brief_text(logic_summary)}",
-        f"Result: {status_label}",
+        f"What it checks: {summarize_intent(logic_summary)}",
     ]
 
-    if status == "FAIL":
-        lines.append(f"Failure: {failure_one_liner(detail)}")
+    if status == "PASS":
+        lines.append("Result: PASS — Tempest completed successfully.")
+    elif status == "FAIL":
+        lines.append(f"Result: FAIL — {failure_one_liner(detail)}")
+        root_parts: list[str] = []
+        hint = failure_context_hint(detail)
+        if hint:
+            root_parts.append(hint)
+        logs_hint = backend_logs_hint(run_dir)
+        if logs_hint:
+            root_parts.append(logs_hint)
         if root_cause:
-            lines.append(f"Root cause: {brief_text(root_cause, max_len=500)}")
-        else:
-            lines.append("Root cause: (Stage 3 did not run)")
+            llm_part = summarize_root_cause(root_cause)
+            if llm_part and llm_part not in " ".join(root_parts):
+                root_parts.append(llm_part)
+        lines.append(
+            "Root cause: " + (" ".join(root_parts) if root_parts else "See log evidence and Stage 3 panels above.")
+        )
     elif status == "SKIP":
-        lines.append(f"Note: {brief_text(detail, max_len=200)}")
+        lines.append(f"Result: SKIPPED — {brief_text(detail, max_len=250)}")
     elif status == "NOT_RUN":
-        lines.append(f"Note: {brief_text(detail, max_len=300)}")
-    elif status == "PASS":
-        lines.append("No root-cause stage — test passed.")
+        lines.append(f"Result: NOT RUN — {brief_text(detail, max_len=300)}")
+    else:
+        lines.append(f"Result: {status_label}")
 
     lines.append(f"Artifacts: {run_dir}")
 
@@ -1089,7 +1202,7 @@ def print_tool_flow():
         ("Root cause\n", "magenta"),
         ("  tempest ✓", "dim"),
         ("      ", ""),
-        ("(read_source)", "dim"),
+        ("(test source)", "dim"),
         ("      ", ""),
         ("(stestr)", "dim"),
         ("            ", ""),
