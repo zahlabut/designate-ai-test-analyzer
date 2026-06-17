@@ -60,12 +60,11 @@ These steps were validated on Ubuntu Noble DevStack (`devstack-noble-new`), usin
 ssh stack@<VM_IP>    # password: stack
 
 source /opt/stack/data/venv/bin/activate
-export TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf
 cd /opt/stack/tempest
 stestr list | grep designate | head
 ```
 
-The analyzer uses `stestr` internally for discovery and execution in Stage 2. On startup it also creates `/etc/tempest/tempest.conf` → DevStack config if missing (requires `sudo`).
+The analyzer reads all settings from **`conf.ini`** (paths, Ollama URL, optional model). It also creates `/etc/tempest/tempest.conf` → DevStack config on startup if missing (requires `sudo`).
 
 ### 2. Clone and install Python dependencies
 
@@ -78,6 +77,8 @@ cd designate-ai-test-analyzer
 
 pip install -r requirements.txt
 ```
+
+Review **`conf.ini`** in this directory — defaults match a standard DevStack VM; change paths or Ollama URL if yours differ.
 
 Do **not** use system Python or `--break-system-packages` — install into the DevStack venv.
 
@@ -136,10 +137,6 @@ curl http://127.0.0.1:11434/api/tags
 
 You should see JSON listing at least one model.
 
-```bash
-export OLLAMA_MODEL=ollama/llama3.2:1b
-```
-
 ### 5. Troubleshooting Ollama
 
 #### `model requires more system memory than is available`
@@ -170,9 +167,9 @@ podman run -d \
   docker.io/ollama/ollama
 
 podman exec -it ollama ollama pull llama3.2:1b
-export OLLAMA_BASE_URL=http://127.0.0.1:11435
-export OLLAMA_MODEL=ollama/llama3.2:1b
 ```
+
+Then set `base_url = http://127.0.0.1:11435` in `conf.ini`.
 
 #### `container state improper` on `podman exec`
 
@@ -184,34 +181,31 @@ With the DevStack venv still active:
 
 ```bash
 source /opt/stack/data/venv/bin/activate
-export TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf
 cd /opt/stack/designate-ai-test-analyzer
 python3 main.py
 ```
 
-On startup you should see the **tool flow** diagram (above), then:
+On startup you should see the **tool flow** diagram, then Ollama model selection (if several models are installed).
 
-```
-LLM: ollama/llama3.2:1b @ http://127.0.0.1:11434
-```
+The script reads **`conf.ini`**, checks Ollama, and lists pulled models before AI stages.
 
-The script checks Ollama connectivity and lists pulled models before AI stages. If several models exist, you pick one; if only one exists, it is used automatically.
+#### Configuration
 
-#### Environment variables
+All settings are in **`conf.ini`** next to `main.py`. Each option has a comment explaining what it does. Main sections:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama HTTP endpoint (no `/v1` suffix) |
-| `OLLAMA_MODEL` | *(auto)* | Optional — skip model picker when set to a pulled model (e.g. `ollama/llama3.2:1b`) |
+| Section | Keys | Purpose |
+|---------|------|---------|
+| `[ollama]` | `base_url`, `model` | Ollama HTTP URL; optional fixed model (empty = pick at startup) |
+| `[tempest]` | `tempest_path`, `config`, `stestr_bin`, … | Paths for stestr and tempest.conf |
+| `[paths]` | `agent_runs_dir` | Where run logs and artifacts are saved |
+| `[crewai]` | `tracing_enabled`, `api_key` | CrewAI internal settings (usually leave as-is) |
 
-Example — Ollama on a remote host (same model):
+Example — Ollama on a remote host: edit `conf.ini`:
 
-```bash
-source /opt/stack/data/venv/bin/activate
-export OLLAMA_BASE_URL=http://10.9.95.131:11434
-export OLLAMA_MODEL=ollama/llama3.2:1b
-cd /opt/stack/designate-ai-test-analyzer
-python3 main.py
+```ini
+[ollama]
+base_url = http://10.9.95.131:11434
+model = ollama/llama3.2:1b
 ```
 
 ---
@@ -222,7 +216,8 @@ python3 main.py
 |-------------|-------|
 | VM sizing | **16 GiB RAM**, 4 vCPU, 80 GiB disk — see [hardware requirements](#vm-hardware-requirements) |
 | DevStack with Designate | DNS enabled; api, central, producer, worker, and mdns running |
-| DevStack venv | `source /opt/stack/data/venv/bin/activate` before `stestr` and `main.py` |
+| DevStack venv | `source /opt/stack/data/venv/bin/activate` before `main.py` |
+| `conf.ini` | Edit paths/Ollama URL for your VM (shipped with defaults for DevStack) |
 | `designate-tempest-plugin` | Installed in Tempest environment |
 | `stestr list` working | See crypto fix in step 3 if discovery fails |
 | Ollama | Podman container with `llama3.2:1b` on the DevStack VM |
@@ -234,7 +229,6 @@ python3 main.py
 
 ```bash
 source /opt/stack/data/venv/bin/activate
-export TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf
 cd /opt/stack/designate-ai-test-analyzer
 python3 main.py
 ```
@@ -251,6 +245,7 @@ If the test is **skipped** (e.g. missing test data file), Stage 2 prints the ski
 
 | Path | Purpose |
 |------|---------|
+| `conf.ini` | All tool settings (Ollama, Tempest paths, artifact directory) |
 | `main.py` | Agent definition, tools, and stage orchestration |
 | `requirements.txt` | Python dependencies (`crewai`, `rich`) |
 | `/opt/stack/agent_runs/run_<timestamp>/` | Per-run artifacts: `tempest_run.log`, `log_evidence.txt`, `designate_logs/*.log` |

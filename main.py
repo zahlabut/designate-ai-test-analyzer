@@ -1,3 +1,20 @@
+"""
+Designate E2E Test Investigator
+================================
+
+This script helps debug failing OpenStack Designate Tempest tests on a DevStack VM.
+
+High-level flow:
+  1. Setup  — check Ollama + Tempest config, list tests, user picks one
+  2. Stage 1 — read test source code, LLM explains what the test does
+  3. Stage 2 — run the test with stestr (no LLM)
+  4. Stage 3 — on FAIL only: collect logs, LLM suggests root cause
+
+Run: python3 main.py  (settings in conf.ini next to this file)
+"""
+
+# --- IMPORTS ---
+# Standard library: run shell commands, read files, talk to Ollama over HTTP, etc.
 import subprocess
 import os
 import sys
@@ -6,36 +23,105 @@ import json
 import importlib.util
 import urllib.error
 import urllib.request
+from configparser import ConfigParser
 from datetime import datetime
+
+# CrewAI: framework that sends tasks to the local LLM (Ollama) and optional tools.
 from crewai import Agent, Task, Crew
 from crewai.tools import tool
+
+# Rich: pretty coloured panels and text in the terminal (better than plain print).
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+# Single shared console instance used everywhere for output.
 console = Console()
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION (conf.ini) ---
+# All user-facing settings live in conf.ini. CrewAI still needs a few internal
+# os.environ values at runtime; those are set from conf.ini, not by the user.
 
-def configure_ollama_env() -> str:
-    """Set Ollama API endpoint for CrewAI. Model is chosen later in setup_ollama_model()."""
-    base = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-    os.environ.setdefault("OPENAI_API_BASE", f"{base}/v1")
-    os.environ.setdefault("OPENAI_API_KEY", "ollama")
-    return base
 
+CONF_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conf.ini")
+
+
+def load_settings() -> ConfigParser:
+    """
+    Why: One config file is easier to document and edit than many env exports.
+    What: Reads conf.ini from the same directory as main.py; exits with a clear
+          error if the file is missing.
+    """
+    if not os.path.isfile(CONF_FILE):
+        console.print(Panel(
+            Text(
+                f"Configuration file not found:\n  {CONF_FILE}\n\n"
+                "Copy conf.ini from the repository and edit paths for your VM."
+            ),
+            title="Startup error",
+            border_style="red",
+        ))
+        sys.exit(1)
+    parser = ConfigParser()
+    parser.read(CONF_FILE)
+    return parser
+
+
+def apply_crewai_from_config(cfg: ConfigParser, base_url: str) -> None:
+    """
+    Why: CrewAI reads OpenAI-compatible settings from os.environ internally.
+    What: Sets those env vars from conf.ini so the user never exports them manually.
+    """
+    os.environ["OPENAI_API_BASE"] = f"{base_url.rstrip('/')}/v1"
+    os.environ["OPENAI_API_KEY"] = cfg.get("crewai", "api_key", fallback="ollama")
+    tracing = cfg.get("crewai", "tracing_enabled", fallback="false").strip().lower()
+    os.environ["CREWAI_TRACING_ENABLED"] = "true" if tracing in ("1", "true", "yes") else "false"
+
+
+def init_globals_from_config(cfg: ConfigParser) -> None:
+    """Load module-level settings from conf.ini into global variables."""
+    global OLLAMA_BASE, CONFIGURED_OLLAMA_MODEL
+    global TEMPEST_PATH, DEVSTACK_TEMPEST_CONF, SYSTEM_TEMPEST_CONF
+    global TEMPEST_CONFIG, STESTR_BIN, BASE_HISTORY_DIR
+
+    OLLAMA_BASE = cfg.get("ollama", "base_url", fallback="http://127.0.0.1:11434").rstrip("/")
+    CONFIGURED_OLLAMA_MODEL = cfg.get("ollama", "model", fallback="").strip()
+    apply_crewai_from_config(cfg, OLLAMA_BASE)
+
+    TEMPEST_PATH = cfg.get("tempest", "tempest_path", fallback="/opt/stack/tempest")
+    DEVSTACK_TEMPEST_CONF = cfg.get("tempest", "devstack_conf", fallback="/opt/stack/tempest/etc/tempest.conf")
+    SYSTEM_TEMPEST_CONF = cfg.get("tempest", "system_conf", fallback="/etc/tempest/tempest.conf")
+    TEMPEST_CONFIG = cfg.get("tempest", "config", fallback=DEVSTACK_TEMPEST_CONF)
+    STESTR_BIN = cfg.get("tempest", "stestr_bin", fallback="/opt/stack/data/venv/bin/stestr")
+    BASE_HISTORY_DIR = cfg.get("paths", "agent_runs_dir", fallback="/opt/stack/agent_runs")
+
+
+# --- OLLAMA / LLM SETUP ---
+# Functions below connect to Ollama (Podman), let the user pick a model,
+# and wire the chosen model into CrewAI.
 
 def ollama_api_model_name(configured_model: str) -> str:
-    """Model id Ollama expects (CrewAI strips the ollama/ prefix)."""
+    """
+    Why: We store models as 'ollama/llama3.1:latest' but Ollama API wants 'llama3.1:latest'.
+    What: Strips the 'ollama/' prefix for API calls and matching.
+    """
     return configured_model.removeprefix("ollama/")
 
 
 def crewai_model_name(ollama_tag: str) -> str:
+    """
+    Why: CrewAI expects model names in 'ollama/<name>' form.
+    What: Adds the 'ollama/' prefix if it is missing.
+    """
     return f"ollama/{ollama_tag}" if not ollama_tag.startswith("ollama/") else ollama_tag
 
 
 def fetch_ollama_models(base_url: str) -> tuple[list[str], str | None]:
-    """Return (model_names, error_message)."""
+    """
+    Why: We need to know which LLM models are actually installed in Ollama.
+    What: Calls Ollama's /api/tags endpoint and returns a sorted list of model names,
+          or an error message if Ollama is not reachable.
+    """
     url = f"{base_url.rstrip('/')}/api/tags"
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
@@ -45,8 +131,7 @@ def fetch_ollama_models(base_url: str) -> tuple[list[str], str | None]:
     except urllib.error.URLError as e:
         return [], (
             f"Cannot reach Ollama at {base_url} ({e.reason}).\n"
-            "Start the Podman container or set OLLAMA_BASE_URL, e.g.:\n"
-            "  export OLLAMA_BASE_URL=http://127.0.0.1:11434"
+            "Start the Podman container or edit base_url in conf.ini."
         )
     except Exception as e:
         return [], f"Cannot reach Ollama at {base_url}: {e}"
@@ -56,6 +141,10 @@ def fetch_ollama_models(base_url: str) -> tuple[list[str], str | None]:
 
 
 def resolve_model_in_list(configured_model: str, available: list[str]) -> str | None:
+    """
+    Why: conf.ini may specify ollama/llama3.1 but Ollama lists llama3.1:latest.
+    What: Finds the best matching name from the available list, or None if not found.
+    """
     requested = ollama_api_model_name(configured_model)
     if requested in available:
         return requested
@@ -67,6 +156,11 @@ def resolve_model_in_list(configured_model: str, available: list[str]) -> str | 
 
 
 def set_active_ollama_model(ollama_tag: str) -> str:
+    """
+    Why: The chosen model must be applied before creating the CrewAI agent.
+    What: Saves the model globally, updates OPENAI_MODEL_NAME, and resets the agent
+          so it is rebuilt with the correct LLM on the next AI stage.
+    """
     global OLLAMA_MODEL
     OLLAMA_MODEL = crewai_model_name(ollama_tag)
     os.environ["OPENAI_MODEL_NAME"] = OLLAMA_MODEL
@@ -75,6 +169,10 @@ def set_active_ollama_model(ollama_tag: str) -> str:
 
 
 def prompt_model_selection(models: list[str]) -> str:
+    """
+    Why: When several models are installed, the user must pick which one to use.
+    What: Shows a numbered list and loops until a valid index is entered.
+    """
     while True:
         choice = input(f"\nSelect Ollama model [0-{len(models) - 1}]: ").strip()
         if not choice.isdigit():
@@ -86,8 +184,12 @@ def prompt_model_selection(models: list[str]) -> str:
         console.print(f"[yellow]Invalid index — use 0 to {len(models) - 1}.[/yellow]")
 
 
-def setup_ollama_model(base_url: str) -> tuple[bool, str | None]:
-    """Connect to Ollama, list models, and pick one. Returns (ok, error_message)."""
+def setup_ollama_model(base_url: str, preferred_model: str = "") -> tuple[bool, str | None]:
+    """
+    Why: Startup must confirm Ollama works and a model is selected before any AI stage.
+    What: Lists models from Ollama; auto-picks if only one; prompts if several;
+          honours conf.ini [ollama] model when set. Returns (ok, error_message).
+    """
     models, err = fetch_ollama_models(base_url)
     if err:
         return False, err
@@ -99,13 +201,13 @@ def setup_ollama_model(base_url: str) -> tuple[bool, str | None]:
         )
 
     selected = None
-    if "OLLAMA_MODEL" in os.environ:
-        selected = resolve_model_in_list(os.environ["OLLAMA_MODEL"], models)
+    if preferred_model:
+        selected = resolve_model_in_list(preferred_model, models)
         if selected:
-            console.print(f"[dim]Using OLLAMA_MODEL: {crewai_model_name(selected)}[/dim]")
+            console.print(f"[dim]Using conf.ini model: {crewai_model_name(selected)}[/dim]")
         else:
             console.print(
-                f"[yellow]OLLAMA_MODEL={os.environ['OLLAMA_MODEL']} not found — choose from list.[/yellow]"
+                f"[yellow]conf.ini model={preferred_model} not found — choose from list.[/yellow]"
             )
 
     if not selected:
@@ -123,18 +225,22 @@ def setup_ollama_model(base_url: str) -> tuple[bool, str | None]:
     return True, None
 
 
-OLLAMA_BASE = configure_ollama_env()
-OLLAMA_MODEL = ""  # populated by setup_ollama_model() before any CrewAI call
-os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
+# --- GLOBAL PATHS AND CONSTANTS ---
+# Populated from conf.ini at import time (see init_globals_from_config).
 
-TEMPEST_PATH = "/opt/stack/tempest"
-DEVSTACK_TEMPEST_CONF = "/opt/stack/tempest/etc/tempest.conf"
-SYSTEM_TEMPEST_CONF = "/etc/tempest/tempest.conf"
-TEMPEST_CONFIG = os.environ.get("TEMPEST_CONFIG", DEVSTACK_TEMPEST_CONF)
-STESTR_BIN = os.environ.get("STESTR", "/opt/stack/data/venv/bin/stestr")
-BASE_HISTORY_DIR = "/opt/stack/agent_runs"
+OLLAMA_BASE = ""
+OLLAMA_MODEL = ""  # Filled in by setup_ollama_model() before any CrewAI call
+CONFIGURED_OLLAMA_MODEL = ""  # From conf.ini [ollama] model (optional)
+TEMPEST_PATH = ""
+DEVSTACK_TEMPEST_CONF = ""
+SYSTEM_TEMPEST_CONF = ""
+TEMPEST_CONFIG = ""
+STESTR_BIN = ""
+BASE_HISTORY_DIR = ""
 
-# DevStack designate units (fallback when systemctl discovery finds none)
+init_globals_from_config(load_settings())
+
+# Fallback Designate systemd units if auto-discovery finds nothing
 DESIGNATE_SERVICES = (
     "designate-api",
     "designate-central",
@@ -143,6 +249,7 @@ DESIGNATE_SERVICES = (
     "designate-mdns",
 )
 
+# Background text given to the LLM so it understands the DevStack / Designate environment.
 SYSTEM_CONTEXT = """
 Environment: OpenStack DevStack (All-in-one).
 Service: Designate (DNS-as-a-Service) with DNS enabled.
@@ -156,20 +263,27 @@ Architecture:
 """
 
 
-# --- SOURCE & LOG ANALYSIS ---
+# --- TEST SOURCE READING (Stage 1) ---
+# These functions locate test Python files on disk and pull out the test method
+# plus helper methods it calls — without relying on the LLM to find files itself.
 
+# unittest helpers we skip when following self.other_method() calls
 SKIP_CALLEES = frozenset({
     "assertEqual", "assertTrue", "assertFalse", "assertIn", "assertNotIn",
     "assertRaises", "assertIsNone", "assertIsNotNone", "addCleanup", "id",
 })
 
+# Pattern to spot error-like lines in logs (ERROR, timeout, traceback, etc.)
 LOG_ERROR_RE = re.compile(
     r"(?i)(error|exception|traceback|critical|fatal|failed|failure|timeout|refused|denied)"
 )
 
 
 def resolve_test_module(test_path: str) -> tuple[str, str, str, str]:
-    """Return (module_path, class_name, method_name, source_file)."""
+    """
+    Why: Tempest test ids look like long dotted names; we need the actual .py file.
+    What: Parses the test id into module, class, method, and filesystem path.
+    """
     clean_path = test_path.split("[")[0]
     parts = clean_path.split(".")
     method_name = parts[-1]
@@ -182,10 +296,18 @@ def resolve_test_module(test_path: str) -> tuple[str, str, str, str]:
 
 
 def methods_defined_in_file(content: str) -> set[str]:
+    """
+    Why: We only want to load helper methods that exist in the same test file.
+    What: Returns all function names defined in that Python file.
+    """
     return set(re.findall(r"^\s+def (\w+)\(", content, re.MULTILINE))
 
 
 def extract_method_source(content: str, method_name: str) -> str | None:
+    """
+    Why: We need the raw Python source of one test or helper method.
+    What: Uses a regex to cut out everything from 'def method_name' to the next 'def'.
+    """
     pattern = re.compile(
         rf"^\s+def {re.escape(method_name)}\(.*?(?=^\s+def |\nclass |\Z)",
         re.DOTALL | re.MULTILINE,
@@ -195,11 +317,19 @@ def extract_method_source(content: str, method_name: str) -> str | None:
 
 
 def called_methods_from_source(method_source: str) -> list[str]:
+    """
+    Why: Tests often call helpers like self._test_update_records(...).
+    What: Finds all self.something( calls in a method body.
+    """
     return sorted(set(re.findall(r"self\.(\w+)\(", method_source)))
 
 
 def load_test_source_bundle(test_path: str, max_helpers: int = 12) -> str:
-    """Load the test method plus helper methods it calls (recursively)."""
+    """
+    Why: Stage 1 needs the full story — test method plus helpers — not just one function.
+    What: Loads the test method and recursively loads helper methods it calls,
+          returns one big text block for the LLM to analyse.
+    """
     _, _, method_name, source_file = resolve_test_module(test_path)
     with open(source_file, encoding="utf-8") as f:
         content = f.read()
@@ -229,7 +359,16 @@ def load_test_source_bundle(test_path: str, max_helpers: int = 12) -> str:
     return f"# Source file: {source_file}\n\n" + "\n\n".join(sections)
 
 
+# --- LOG COLLECTION AND ANALYSIS (Stage 3) ---
+# Pull journal logs from each Designate service, find error lines,
+# and build a structured report before asking the LLM for a verdict.
+
+
 def fetch_unit_log(unit: str, since: str) -> str:
+    """
+    Why: Each Designate service logs to systemd journal separately.
+    What: Runs journalctl for one unit (e.g. designate-worker) since the test started.
+    """
     cmd = f"sudo journalctl -u {unit} --since '{since}' --no-pager"
     try:
         return subprocess.check_output(cmd, shell=True).decode("utf-8").strip()
@@ -238,6 +377,10 @@ def fetch_unit_log(unit: str, since: str) -> str:
 
 
 def fetch_designate_logs_by_service(since: str) -> dict[str, str]:
+    """
+    Why: Stage 3 needs logs from every Designate service, not merged into one blob.
+    What: Discovers all designate systemd units and fetches each log into a dict.
+    """
     logs = {}
     for unit in designate_journal_units():
         service = unit.removeprefix("devstack@").removesuffix(".service")
@@ -246,6 +389,10 @@ def fetch_designate_logs_by_service(since: str) -> dict[str, str]:
 
 
 def extract_error_excerpts(log: str, context: int = 1, max_excerpts: int = 15) -> list[str]:
+    """
+    Why: Full logs are too long; we want lines that look like errors plus nearby context.
+    What: Scans log lines for error keywords and returns short excerpts.
+    """
     if not log:
         return []
     lines = log.splitlines()
@@ -267,6 +414,10 @@ def extract_error_excerpts(log: str, context: int = 1, max_excerpts: int = 15) -
 
 
 def summarize_log_section(title: str, log: str) -> str:
+    """
+    Why: The evidence report must say clearly if a service had errors or was clean.
+    What: Formats one log section with a header, error excerpts, or 'no errors detected'.
+    """
     lines = log.splitlines() if log else []
     header = f"=== {title} ==="
     if not lines:
@@ -291,7 +442,10 @@ def summarize_log_section(title: str, log: str) -> str:
 
 
 def read_tempest_dns_config() -> str:
-    """Extract nameserver settings from tempest.conf for failure context."""
+    """
+    Why: DNS propagation failures often come from wrong nameserver ports in tempest.conf.
+    What: Reads [dns] and [designate] nameserver lines from tempest.conf for the report.
+    """
     if not os.path.isfile(TEMPEST_CONFIG):
         return ""
     hits: list[str] = []
@@ -311,6 +465,11 @@ def build_log_evidence_report(
     tempest_trace: str,
     service_logs: dict[str, str],
 ) -> str:
+    """
+    Why: The LLM needs a structured summary, not raw megabytes of logs.
+    What: Combines tempest.conf DNS settings, traceback, tempest log, and each
+          Designate service into one evidence report string.
+    """
     sections = []
 
     dns_cfg = read_tempest_dns_config()
@@ -331,6 +490,10 @@ def build_log_evidence_report(
 
 
 def save_service_logs(run_dir: str, service_logs: dict[str, str]) -> None:
+    """
+    Why: Users may want to inspect full raw logs after the run.
+    What: Writes each service log to run_dir/designate_logs/<service>.log on disk.
+    """
     logs_dir = os.path.join(run_dir, "designate_logs")
     os.makedirs(logs_dir, exist_ok=True)
     for service, log in service_logs.items():
@@ -338,11 +501,17 @@ def save_service_logs(run_dir: str, service_logs: dict[str, str]) -> None:
         with open(path, "w", encoding="utf-8") as f:
             f.write(log or "")
 
+
+# --- CREWAI TOOL ---
+# A small function the LLM can call to read test source (see read_source below).
+
+
 @tool("read_source")
 def read_source(test_path: str):
     """
-    Reads the Python source code for a test method.
-    Input should be the full python path (e.g. module.ClassName.method_name).
+    CrewAI tool (optional): lets the agent read a single test method from disk.
+    Stage 1 mainly uses load_test_source_bundle() instead, but this tool remains
+    available if the agent needs to look up code on its own.
     """
     try:
         clean_path = test_path.split('[')[0]
@@ -362,18 +531,27 @@ def read_source(test_path: str):
         return f"Error reading code: {str(e)}"
 
 
-# --- AGENT ---
+# --- CREWAI AGENT ---
+# The "analyst" is the AI persona that explains tests and diagnoses failures.
+# We create it lazily (after model selection) because it locks in the LLM at creation time.
 
 _analyst: Agent | None = None
 
 
 def reset_analyst() -> None:
+    """
+    Why: Changing the Ollama model requires a fresh agent bound to the new model.
+    What: Clears the cached agent so get_analyst() builds a new one.
+    """
     global _analyst
     _analyst = None
 
 
 def get_analyst() -> Agent:
-    """Build CrewAI agent after Ollama model is selected (Agent caches LLM at creation)."""
+    """
+    Why: The agent must be created only after the user picks an Ollama model.
+    What: Builds the Designate Expert agent once, reuses it for Stage 1 and Stage 3.
+    """
     global _analyst
     if _analyst is None:
         _analyst = Agent(
@@ -387,18 +565,31 @@ def get_analyst() -> Agent:
     return _analyst
 
 
-# --- STAGE HANDLERS ---
+# --- TERMINAL UI HELPERS ---
+# Pretty-print stage headers, result panels, and safe text for Rich.
+
 
 def rich_text(value: str) -> Text:
-    """Plain text safe for Rich (avoids [id-...] being parsed as markup)."""
+    """
+    Why: Test names contain [id-uuid] which Rich would treat as formatting markup.
+    What: Wraps plain text so brackets display correctly in the terminal.
+    """
     return Text(value)
 
 
 def test_method_name(test_path: str) -> str:
+    """
+    Why: Full test ids are very long; panels need a short display name.
+    What: Returns just the method name (e.g. test_update_records_propagated_to_backends_01_A).
+    """
     return test_path.split("[")[0].rsplit(".", 1)[-1]
 
 
 def print_stage_header(number: int, title: str, style: str, description: str, meta: list[str] | None = None):
+    """
+    Why: Each stage should be visually distinct and explain what will happen.
+    What: Prints a coloured Rich panel with stage number, description, and optional details.
+    """
     body = Text(description, style=style)
     if meta:
         body.append("\n")
@@ -409,21 +600,41 @@ def print_stage_header(number: int, title: str, style: str, description: str, me
 
 
 def print_result_panel(title: str, body: str, style: str):
+    """
+    Why: LLM output and log summaries are easier to read in bordered panels.
+    What: Prints a Rich panel with a title and coloured border.
+    """
     console.print(Panel(rich_text(body), title=title, border_style=style))
 
 
 def run_crew_task(task: Task) -> str:
+    """
+    Why: Stage 1 and Stage 3 both send a Task to the same analyst agent.
+    What: Runs one CrewAI task and returns the LLM response as a string.
+    """
     return str(Crew(agents=[get_analyst()], tasks=[task], verbose=False).kickoff())
 
 
+# --- TEMPEST / STESTR HELPERS ---
+# Configure tempest.conf, discover tests, run stestr, and interpret PASS/FAIL/SKIP.
+
+
 def tempest_env() -> dict[str, str]:
+    """
+    Why: stestr subprocess needs TEMPEST_CONFIG and the activated venv PATH.
+    What: Copies the shell environment and sets TEMPEST_CONFIG from conf.ini.
+    """
     env = os.environ.copy()
     env["TEMPEST_CONFIG"] = TEMPEST_CONFIG
     return env
 
 
 def ensure_tempest_conf_symlink() -> tuple[bool, str, bool]:
-    """Create /etc/tempest/tempest.conf → DevStack path when missing. Returns (ok, path_or_error, created)."""
+    """
+    Why: stestr defaults to /etc/tempest/tempest.conf but DevStack puts config elsewhere.
+    What: Creates /etc/tempest/tempest.conf → DevStack path if missing (needs sudo).
+          Returns (ok, path_or_error, created_new_symlink).
+    """
     if os.path.isfile(SYSTEM_TEMPEST_CONF):
         return True, SYSTEM_TEMPEST_CONF, False
     if not os.path.isfile(DEVSTACK_TEMPEST_CONF):
@@ -450,6 +661,10 @@ def ensure_tempest_conf_symlink() -> tuple[bool, str, bool]:
 
 
 def verify_tempest_config() -> tuple[bool, str]:
+    """
+    Why: Startup must fail fast if Tempest credentials file is missing.
+    What: Checks DevStack tempest.conf exists and ensures the /etc symlink if needed.
+    """
     if not os.path.isfile(TEMPEST_CONFIG) and not os.path.isfile(DEVSTACK_TEMPEST_CONF):
         return False, (
             f"Tempest config not found at {TEMPEST_CONFIG}.\n"
@@ -467,12 +682,18 @@ def verify_tempest_config() -> tuple[bool, str]:
 
 
 def stestr_run_filter(test_id: str) -> str:
-    """stestr run filters are regex; escape [id-...] and other special chars."""
+    """
+    Why: stestr treats test filters as regex; [id-uuid] brackets break the match.
+    What: Escapes special characters so the exact test id is run safely.
+    """
     return re.escape(test_id)
 
 
 def parse_tempest_result(output: str, returncode: int) -> tuple[str, str]:
-    """Return (status, detail). status is PASS, FAIL, SKIP, or NOT_RUN."""
+    """
+    Why: Stage 2 must branch correctly on PASS, FAIL, SKIP, or NOT_RUN.
+    What: Parses stestr stdout for counts and traceback; returns (status, detail text).
+    """
     skip_match = re.search(r"SKIPPED:\s*(.+)", output)
     invalid_regex = re.search(r"Invalid regex:\s*(.+?)\s*provided in filters", output)
     ran_match = re.search(r"Ran:\s*(\d+)\s*tests", output)
@@ -532,7 +753,10 @@ def parse_tempest_result(output: str, returncode: int) -> tuple[str, str]:
 
 
 def designate_journal_units() -> list[str]:
-    """Return devstack@designate*.service units on this host."""
+    """
+    Why: We need the real systemd unit names for each Designate service on this VM.
+    What: Lists devstack@designate*.service units, or falls back to DESIGNATE_SERVICES.
+    """
     try:
         out = subprocess.check_output(
             [
@@ -552,10 +776,22 @@ def designate_journal_units() -> list[str]:
 
 
 def designate_service_names(units: list[str]) -> str:
+    """
+    Why: Stage headers should show human-readable service names, not full unit paths.
+    What: Turns 'devstack@designate-worker.service' into 'designate-worker' list text.
+    """
     return ", ".join(u.removeprefix("devstack@").removesuffix(".service") for u in units)
 
 
+# --- STAGE RUNNERS ---
+# Stage 1 = explain test, Stage 2 = run stestr, Stage 3 = diagnose failure.
+
+
 def run_stage_logic_discovery(test_path):
+    """
+    Why: Before running a test, we want to know what it is supposed to verify.
+    What: Loads test source code, asks Ollama to explain the flow, prints result panel.
+    """
     try:
         source_bundle = load_test_source_bundle(test_path)
     except FileNotFoundError as e:
@@ -589,6 +825,11 @@ def run_stage_logic_discovery(test_path):
 
 
 def run_stage_execution(test_path):
+    """
+    Why: We must actually run the Tempest test to see if it passes or fails.
+    What: Runs stestr --serial, saves output to agent_runs/, prints PASS/FAIL/SKIP panel.
+          Returns status, failure detail, start time, and artifact directory.
+    """
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join(BASE_HISTORY_DIR, f"run_{ts}")
     os.makedirs(run_dir, exist_ok=True)
@@ -664,6 +905,11 @@ def run_stage_execution(test_path):
 
 
 def run_stage_root_cause(logic, trace, start_time, run_dir):
+    """
+    Why: On failure, engineers need logs correlated with test intent and traceback.
+    What: Collects per-service logs, builds evidence report, asks Ollama for root cause.
+          Only runs when Stage 2 status is FAIL.
+    """
     tempest_log_path = os.path.join(run_dir, "tempest_run.log")
     units = designate_journal_units()
     service_list = designate_service_names(units)
@@ -709,14 +955,24 @@ def run_stage_root_cause(logic, trace, start_time, run_dir):
     return result
 
 
-# --- MAIN ---
+# --- CLI ENTRY POINT ---
+# Functions for test discovery, user prompts, and the main script flow.
+
 
 def llm_stage_line() -> str:
+    """
+    Why: Stage headers show which Ollama model and URL are in use.
+    What: Returns one line like 'Ollama (ollama/llama3.1:latest) @ http://127.0.0.1:11434'.
+    """
     return f"Ollama ({OLLAMA_MODEL}) @ {OLLAMA_BASE}"
 
 
 def get_full_test_list(grep_str=None):
-    """Return (tests, error). error is set when stestr discovery fails."""
+    """
+    Why: User picks a test from a filtered list, not by typing the full id.
+    What: Runs 'stestr list', keeps designate tests, optionally filters by grep string.
+          Returns (tests, error_message).
+    """
     list_result = subprocess.run(
         [STESTR_BIN, "list"],
         cwd=TEMPEST_PATH,
@@ -738,7 +994,10 @@ def get_full_test_list(grep_str=None):
 
 
 def prompt_test_selection(tests):
-    """Require the user to pick a test index from the displayed list."""
+    """
+    Why: User must explicitly choose a test — there is no default selection.
+    What: Loops until a valid index into the displayed test list is entered.
+    """
     while True:
         choice = input(f"\nSelect test number [0-{len(tests) - 1}]: ").strip()
         if not choice.isdigit():
@@ -751,7 +1010,10 @@ def prompt_test_selection(tests):
 
 
 def print_tool_flow():
-    """Show the pipeline diagram below the title banner."""
+    """
+    Why: New users should see the pipeline before anything runs.
+    What: Prints the ASCII Setup → Stage 1 → Stage 2 → Stage 3 diagram at startup.
+    """
     flow = Text.assemble(
         ("  Setup          Stage 1              Stage 2              Stage 3\n", "bold"),
         ("  ─────          ───────              ───────              ───────\n", "dim"),
@@ -791,6 +1053,9 @@ def print_tool_flow():
 
 
 if __name__ == "__main__":
+    # Script entry point: runs only when you execute 'python3 main.py' directly.
+
+    # 1. Banner and pipeline diagram
     console.print(Panel(
         Text.from_markup(
             "[bold green]Designate E2E Test Investigator[/bold green]\n"
@@ -800,18 +1065,21 @@ if __name__ == "__main__":
     ))
     print_tool_flow()
 
-    llm_ok, llm_error = setup_ollama_model(OLLAMA_BASE)
+    # 2. Ollama: connect, list models, user picks one (or auto if only one)
+    llm_ok, llm_error = setup_ollama_model(OLLAMA_BASE, CONFIGURED_OLLAMA_MODEL)
     if not llm_ok:
         print_result_panel("Startup error", llm_error, "red")
         sys.exit(1)
     console.print(rich_text(f"LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE}"), justify="left")
 
+    # 3. Tempest: verify config and create /etc/tempest symlink if needed
     cfg_ok, cfg_msg = verify_tempest_config()
     if not cfg_ok:
         print_result_panel("Startup error", cfg_msg, "red")
         sys.exit(1)
     console.print(rich_text(f"Tempest config: {cfg_msg}"), style="dim")
 
+    # 4. Discover tests (optional grep) and let user pick one
     grep_query = input("Grep tests (e.g. 'multipool') or ENTER for all: ").strip()
     tests, stestr_error = get_full_test_list(grep_query)
 
@@ -832,6 +1100,7 @@ if __name__ == "__main__":
     target_test = prompt_test_selection(tests)
     print_result_panel("Selected test", target_test, "blue")
 
+    # 5. Run the three stages (Stage 3 only if Stage 2 fails)
     logic_summary = run_stage_logic_discovery(target_test)
     status, detail, start_time, run_dir = run_stage_execution(target_test)
 
