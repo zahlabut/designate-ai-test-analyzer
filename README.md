@@ -26,6 +26,7 @@ Autonomous diagnostic agent for OpenStack Designate Tempest failures. It reads t
 | **Stage 1** | Load test + helper source code; Ollama explains the end-to-end flow |
 | **Stage 2** | Run `stestr run --serial`; save output under `/opt/stack/agent_runs/` |
 | **Stage 3** | **FAIL only** — log evidence report per service + Ollama root-cause verdict |
+| **Summary** | Closing recap: test, brief intent, PASS/FAIL, root cause if failed |
 
 ---
 
@@ -51,6 +52,7 @@ Validated on Ubuntu Noble DevStack. Use the **DevStack venv** (`source /opt/stac
 ### 1. Clone and install
 
 ```bash
+source /opt/stack/data/venv/bin/activate
 cd /opt/stack
 git clone https://github.com/zahlabut/designate-ai-test-analyzer.git
 cd designate-ai-test-analyzer

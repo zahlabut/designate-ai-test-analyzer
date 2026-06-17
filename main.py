@@ -1005,6 +1005,73 @@ def prompt_test_selection(tests):
         console.print(f"[yellow]Invalid index — use 0 to {len(tests) - 1}.[/yellow]")
 
 
+def brief_text(text: str, max_len: int = 350) -> str:
+    """
+    Why: Stage 1 intent can be long; the final summary needs a short blurb.
+    What: Returns the first paragraph or truncates at a word boundary.
+    """
+    text = text.strip()
+    if not text:
+        return "No test intent available."
+    paragraph = text.split("\n\n")[0].replace("\n", " ").strip()
+    if len(paragraph) <= max_len:
+        return paragraph
+    cut = paragraph[:max_len].rsplit(" ", 1)[0]
+    return cut + "…"
+
+
+def failure_one_liner(detail: str) -> str:
+    """
+    Why: The summary needs one line for Stage 2 failure, not the full traceback.
+    What: Picks the most useful exception/error line from stestr output.
+    """
+    for line in reversed([ln.strip() for ln in detail.splitlines() if ln.strip()]):
+        if re.search(r"(Error|Exception|FAIL|Timeout|AssertionError)", line):
+            return line[:250]
+    lines = [ln.strip() for ln in detail.splitlines() if ln.strip()]
+    return lines[-1][:250] if lines else "See tempest log for details."
+
+
+def print_run_summary(
+    test_path: str,
+    logic_summary: str,
+    status: str,
+    detail: str,
+    run_dir: str,
+    root_cause: str | None = None,
+) -> None:
+    """
+    Why: Users need a single closing recap after all stages finish.
+    What: Prints test name, brief intent, PASS/FAIL/SKIP result, and root cause if any.
+    """
+    style = {"PASS": "green", "FAIL": "red", "SKIP": "yellow", "NOT_RUN": "red"}.get(status, "white")
+    status_label = {"PASS": "PASS", "FAIL": "FAIL", "SKIP": "SKIPPED", "NOT_RUN": "NOT RUN"}.get(status, status)
+
+    lines = [
+        f"Test: {test_method_name(test_path)}",
+        f"Intent: {brief_text(logic_summary)}",
+        f"Result: {status_label}",
+    ]
+
+    if status == "FAIL":
+        lines.append(f"Failure: {failure_one_liner(detail)}")
+        if root_cause:
+            lines.append(f"Root cause: {brief_text(root_cause, max_len=500)}")
+        else:
+            lines.append("Root cause: (Stage 3 did not run)")
+    elif status == "SKIP":
+        lines.append(f"Note: {brief_text(detail, max_len=200)}")
+    elif status == "NOT_RUN":
+        lines.append(f"Note: {brief_text(detail, max_len=300)}")
+    elif status == "PASS":
+        lines.append("No root-cause stage — test passed.")
+
+    lines.append(f"Artifacts: {run_dir}")
+
+    console.print()
+    print_result_panel("Run summary", "\n\n".join(lines), style)
+
+
 def print_tool_flow():
     """
     Why: New users should see the pipeline before anything runs.
@@ -1096,15 +1163,19 @@ if __name__ == "__main__":
     target_test = prompt_test_selection(tests)
     print_result_panel("Selected test", target_test, "blue")
 
-    # 5. Run the three stages (Stage 3 only if Stage 2 fails)
+    # 5. Run stages (Stage 3 only on FAIL), then print a closing summary
     logic_summary = run_stage_logic_discovery(target_test)
     status, detail, start_time, run_dir = run_stage_execution(target_test)
 
+    root_cause = None
     if status == "FAIL":
-        run_stage_root_cause(logic_summary, detail, start_time, run_dir)
-    elif status == "PASS":
-        console.print("\n[bold green]Done — test passed, no further analysis needed.[/bold green]")
-    else:
-        console.print(
-            "\n[dim]Done — test did not run to completion; fix the issue above and re-run.[/dim]"
-        )
+        root_cause = run_stage_root_cause(logic_summary, detail, start_time, run_dir)
+
+    print_run_summary(
+        target_test,
+        logic_summary,
+        status,
+        detail,
+        run_dir,
+        root_cause=root_cause,
+    )
