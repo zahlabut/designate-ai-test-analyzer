@@ -121,9 +121,18 @@ def verify_tempest_config() -> tuple[bool, str]:
     )
 
 
+def stestr_run_filter(test_id: str) -> str:
+    """stestr run filters are regex; escape [id-...] and other special chars."""
+    return re.escape(test_id)
+
+
 def parse_tempest_result(output: str, returncode: int) -> tuple[str, str]:
-    """Return (status, detail). status is PASS, FAIL, or SKIP."""
+    """Return (status, detail). status is PASS, FAIL, SKIP, or NOT_RUN."""
     skip_match = re.search(r"SKIPPED:\s*(.+)", output)
+    invalid_regex = re.search(r"Invalid regex:\s*(.+?)\s*provided in filters", output)
+    ran_match = re.search(r"Ran:\s*(\d+)\s*tests", output)
+    ran = int(ran_match.group(1)) if ran_match else None
+
     totals = {
         name: int(m.group(1))
         for name, m in (
@@ -138,6 +147,22 @@ def parse_tempest_result(output: str, returncode: int) -> tuple[str, str]:
     skipped = totals.get("skipped", 0)
     passed = totals.get("passed", 0)
     skip_reason = skip_match.group(1).strip() if skip_match else "unknown skip reason"
+
+    if invalid_regex:
+        return "NOT_RUN", (
+            f"stestr could not match the test (invalid regex filter).\n"
+            f"{invalid_regex.group(1).strip()}\n"
+            "Square brackets in [id-...] must be escaped for stestr — this is fixed in main.py."
+        )
+
+    if ran == 0 and failed == 0 and passed == 0 and skipped == 0:
+        detail = output.strip()[-2000:] or f"stestr exited with code {returncode}"
+        if "No config file found" in output:
+            detail = (
+                "stestr was not run from /opt/stack/tempest (missing .stestr.conf).\n"
+                + detail
+            )
+        return "NOT_RUN", detail
 
     if skipped > 0 and failed == 0 and passed == 0:
         return "SKIP", skip_reason
@@ -199,10 +224,14 @@ def run_stage_execution(test_path):
 
     console.print(f"\n[bold yellow]🚀 STAGE 2: EXECUTING FRESH TEST RUN...[/bold yellow]")
     console.print(f"[dim]TEMPEST_CONFIG={TEMPEST_CONFIG}[/dim]")
-    console.print(f"[dim]stestr run --serial {test_path}[/dim]")
+    console.print(f"[dim]cwd={TEMPEST_PATH}[/dim]")
+    console.print(f"[dim]Test id: {test_path}[/dim]")
+
+    run_filter = stestr_run_filter(test_path)
+    console.print(f"[dim]stestr run --serial {run_filter}[/dim]")
 
     process = subprocess.Popen(
-        [STESTR_BIN, "run", "--serial", test_path],
+        [STESTR_BIN, "run", "--serial", run_filter],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         cwd=TEMPEST_PATH,
@@ -229,6 +258,9 @@ def run_stage_execution(test_path):
     elif status == "SKIP":
         console.print(f"\n[bold yellow]Result: SKIPPED[/bold yellow]")
         console.print(Panel(Text(detail, style="yellow"), title="Skip reason", border_style="yellow"))
+    elif status == "NOT_RUN":
+        console.print(f"\n[bold red]Result: NOT RUN[/bold red]")
+        console.print(Panel(Text(detail, style="red"), title="Test did not execute", border_style="red"))
     else:
         console.print(f"\n[bold red]Result: FAIL[/bold red]")
 
@@ -346,6 +378,11 @@ if __name__ == "__main__":
         console.print(
             "\n[dim]Test was skipped — no backend failure to investigate. "
             "Fix the skip reason above and re-run.[/dim]"
+        )
+    elif status == "NOT_RUN":
+        console.print(
+            "\n[dim]Test never executed — no Designate logs to analyze. "
+            "Fix the stestr error above and re-run.[/dim]"
         )
     elif status == "FAIL":
         final_verdict = run_stage_root_cause(logic_summary, detail, start_time, run_dir)

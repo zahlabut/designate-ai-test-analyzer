@@ -93,6 +93,15 @@ cd /opt/stack/tempest
 stestr list | grep designate | head
 ```
 
+Run one test manually (note `[id-...]` brackets must be escaped — `main.py` does this automatically):
+
+```bash
+cd /opt/stack/tempest
+export TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf
+python3 -c "import re; print(re.escape('designate_tempest_plugin.tests.api.v2.test_unauthed.TestDnsUnauthed.test_update_recordset[id-0600f628-de94-11ed-8334-201e8823901f]'))" \
+  | xargs -I{} stestr run --serial {}
+```
+
 DevStack writes credentials to `/opt/stack/tempest/etc/tempest.conf`. Without `TEMPEST_CONFIG`, `stestr run` defaults to missing `/etc/tempest/tempest.conf` and fails with `Password is not defined`.
 
 One-time fix (optional — makes manual runs work without the export):
