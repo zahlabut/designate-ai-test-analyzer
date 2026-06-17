@@ -389,6 +389,46 @@ def prompt_test_selection(tests):
         console.print(f"[yellow]Invalid index — use 0 to {len(tests) - 1}.[/yellow]")
 
 
+def print_tool_flow():
+    """Show the pipeline diagram below the title banner."""
+    flow = Text.assemble(
+        ("  Setup          Stage 1              Stage 2              Stage 3\n", "bold"),
+        ("  ─────          ───────              ───────              ───────\n", "dim"),
+        ("  Ollama ✓", "dim"),
+        ("   →   ", "dim"),
+        ("Analyze logic", "cyan"),
+        ("   →   ", "dim"),
+        ("Run test", "yellow"),
+        ("   →   ", "dim"),
+        ("Root cause\n", "magenta"),
+        ("  tempest ✓", "dim"),
+        ("      ", ""),
+        ("(read_source)", "dim"),
+        ("      ", ""),
+        ("(stestr)", "dim"),
+        ("            ", ""),
+        ("(journalctl)\n", "dim"),
+        ("                   ", ""),
+        ("cyan · LLM", "cyan"),
+        ("          ", ""),
+        ("yellow", "yellow"),
+        ("              ", ""),
+        ("magenta · LLM\n", "magenta"),
+        ("                                        │\n", "dim"),
+        ("                                        ├─ ", "dim"),
+        ("PASS", "green"),
+        ("  → done\n", "dim"),
+        ("                                        ├─ ", "dim"),
+        ("SKIP", "yellow"),
+        ("  → done\n", "dim"),
+        ("                                        └─ ", "dim"),
+        ("FAIL", "red"),
+        ("  → Stage 3\n", "dim"),
+    )
+    console.print()
+    console.print(flow)
+
+
 if __name__ == "__main__":
     console.print(Panel(
         Text.from_markup(
@@ -397,6 +437,7 @@ if __name__ == "__main__":
         ),
         border_style="green",
     ))
+    print_tool_flow()
     console.print(rich_text(f"LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE}"), justify="left")
 
     llm_ok, llm_error = verify_llm_connection(OLLAMA_BASE)

@@ -6,6 +6,33 @@ Autonomous diagnostic agent for OpenStack Designate Tempest failures. It reads t
 
 ---
 
+## Tool flow
+
+When you run `main.py`, the CLI prints this pipeline before test selection:
+
+```
+  Setup          Stage 1              Stage 2              Stage 3
+  ─────          ───────              ───────              ───────
+  Ollama ✓   →   Analyze logic   →   Run test        →   Root cause
+  tempest ✓      (read_source)       (stestr)            (journalctl)
+                   cyan · LLM          yellow              magenta · LLM
+                                        │
+                                        ├─ PASS  → done
+                                        ├─ SKIP  → done
+                                        └─ FAIL  → Stage 3
+```
+
+| Phase | What it does |
+|-------|--------------|
+| **Setup** | Verify Ollama and `tempest.conf`; discover tests with `stestr list` (optional grep); pick one by index |
+| **Stage 1** | Ollama calls `read_source` to load the test method, then explains what it checks and expected Designate behavior |
+| **Stage 2** | Runs `stestr run --serial` against DevStack; full output saved under `/opt/stack/agent_runs/run_<timestamp>/` |
+| **Stage 3** | **FAIL only** — pulls `designate-central` and `designate-worker` journal logs from the run window; Ollama correlates logs with the traceback and Stage 1 intent |
+
+**Stage 2 outcomes:** PASS or SKIP → done · FAIL → Stage 3
+
+---
+
 ## VM hardware requirements (DevStack + Ollama on same host)
 
 DevStack and Ollama compete for the same RAM. An **8 GiB / 2 vCPU** VM can run Tempest, but will fail to load `llama3.1` locally (Ollama reported ~4.8 GiB needed while only ~1.3 GiB was free with DevStack running).
@@ -283,7 +310,7 @@ cd /opt/stack/designate-ai-test-analyzer
 python3 main.py
 ```
 
-On startup you should see:
+On startup you should see the **tool flow** diagram (above), then:
 
 ```
 LLM: ollama/llama3.1 @ http://127.0.0.1:11434
@@ -335,10 +362,7 @@ python3 main.py
 
 1. **Grep tests** — enter a filter (e.g. `recordset`, `multipool`) or press ENTER for all designate tests.
 2. **Select test** — enter the index number from the list (required).
-3. **Autonomous stages:**
-   - **Stage 1: Logic discovery** — AI reads test source and explains intent step by step.
-   - **Stage 2: Execution** — runs `stestr run <test>`, saves output to `/opt/stack/agent_runs/run_<timestamp>/`.
-   - **Stage 3: Root cause** (on failure only) — fetches `journalctl` logs and produces a technical verdict.
+3. **Stages** — see [Tool flow](#tool-flow) for the full pipeline (Setup → Stage 1 → Stage 2 → Stage 3 on failure).
 
 If the test is **skipped** (e.g. missing test data file), Stage 2 prints the skip reason and Stage 3 is not run.
 
