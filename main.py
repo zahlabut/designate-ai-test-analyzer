@@ -74,7 +74,187 @@ Architecture:
 """
 
 
-# --- TOOLS ---
+# --- SOURCE & LOG ANALYSIS ---
+
+SKIP_CALLEES = frozenset({
+    "assertEqual", "assertTrue", "assertFalse", "assertIn", "assertNotIn",
+    "assertRaises", "assertIsNone", "assertIsNotNone", "addCleanup", "id",
+})
+
+LOG_ERROR_RE = re.compile(
+    r"(?i)(error|exception|traceback|critical|fatal|failed|failure|timeout|refused|denied)"
+)
+
+
+def resolve_test_module(test_path: str) -> tuple[str, str, str, str]:
+    """Return (module_path, class_name, method_name, source_file)."""
+    clean_path = test_path.split("[")[0]
+    parts = clean_path.split(".")
+    method_name = parts[-1]
+    class_name = parts[-2]
+    module_path = ".".join(parts[:-2])
+    spec = importlib.util.find_spec(module_path)
+    if not spec or not spec.origin:
+        raise FileNotFoundError(f"Could not locate module for {module_path}")
+    return module_path, class_name, method_name, spec.origin
+
+
+def methods_defined_in_file(content: str) -> set[str]:
+    return set(re.findall(r"^\s+def (\w+)\(", content, re.MULTILINE))
+
+
+def extract_method_source(content: str, method_name: str) -> str | None:
+    pattern = re.compile(
+        rf"^\s+def {re.escape(method_name)}\(.*?(?=^\s+def |\nclass |\Z)",
+        re.DOTALL | re.MULTILINE,
+    )
+    match = pattern.search(content)
+    return match.group(0).strip() if match else None
+
+
+def called_methods_from_source(method_source: str) -> list[str]:
+    return sorted(set(re.findall(r"self\.(\w+)\(", method_source)))
+
+
+def load_test_source_bundle(test_path: str, max_helpers: int = 12) -> str:
+    """Load the test method plus helper methods it calls (recursively)."""
+    _, _, method_name, source_file = resolve_test_module(test_path)
+    with open(source_file, encoding="utf-8") as f:
+        content = f.read()
+
+    defined = methods_defined_in_file(content)
+    sections: list[str] = []
+    seen: set[str] = set()
+    queue = [method_name]
+
+    while queue and len(seen) < max_helpers + 1:
+        name = queue.pop(0)
+        if name in seen:
+            continue
+        src = extract_method_source(content, name)
+        if not src:
+            continue
+        seen.add(name)
+        label = "Test method" if name == method_name else "Helper"
+        sections.append(f"# {label}: {name}\n{src}")
+
+        for callee in called_methods_from_source(src):
+            if callee in defined and callee not in seen and callee not in SKIP_CALLEES:
+                queue.append(callee)
+
+    if not sections:
+        return f"Error: could not extract source for {method_name} from {source_file}"
+    return f"# Source file: {source_file}\n\n" + "\n\n".join(sections)
+
+
+def fetch_unit_log(unit: str, since: str) -> str:
+    cmd = f"sudo journalctl -u {unit} --since '{since}' --no-pager"
+    try:
+        return subprocess.check_output(cmd, shell=True).decode("utf-8").strip()
+    except subprocess.CalledProcessError:
+        return ""
+
+
+def fetch_designate_logs_by_service(since: str) -> dict[str, str]:
+    logs = {}
+    for unit in designate_journal_units():
+        service = unit.removeprefix("devstack@").removesuffix(".service")
+        logs[service] = fetch_unit_log(unit, since)
+    return logs
+
+
+def extract_error_excerpts(log: str, context: int = 1, max_excerpts: int = 15) -> list[str]:
+    if not log:
+        return []
+    lines = log.splitlines()
+    excerpts: list[str] = []
+    seen_ranges: set[tuple[int, int]] = set()
+
+    for i, line in enumerate(lines):
+        if not LOG_ERROR_RE.search(line):
+            continue
+        start = max(0, i - context)
+        end = min(len(lines), i + context + 1)
+        if (start, end) in seen_ranges:
+            continue
+        seen_ranges.add((start, end))
+        excerpts.append("\n".join(lines[start:end]))
+        if len(excerpts) >= max_excerpts:
+            break
+    return excerpts
+
+
+def summarize_log_section(title: str, log: str) -> str:
+    lines = log.splitlines() if log else []
+    header = f"=== {title} ==="
+    if not lines:
+        return f"{header}\nNo log entries in this window.\n"
+
+    excerpts = extract_error_excerpts(log)
+    if not excerpts:
+        return (
+            f"{header}\n"
+            f"{len(lines)} log line(s) in window — no errors detected.\n"
+            f"Last line: {lines[-1][:200]}\n"
+        )
+
+    body = "\n---\n".join(excerpts)
+    if len(body) > 2500:
+        body = body[:2500] + "\n… (truncated)"
+    return (
+        f"{header}\n"
+        f"{len(lines)} log line(s); {len(excerpts)} error excerpt(s):\n"
+        f"{body}\n"
+    )
+
+
+def read_tempest_dns_config() -> str:
+    """Extract nameserver settings from tempest.conf for failure context."""
+    if not os.path.isfile(TEMPEST_CONFIG):
+        return ""
+    hits: list[str] = []
+    section = ""
+    with open(TEMPEST_CONFIG, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                section = stripped
+            if section in ("[dns]", "[designate]") and "nameserver" in stripped.lower():
+                hits.append(f"{section} {stripped}")
+    return "\n".join(hits)
+
+
+def build_log_evidence_report(
+    tempest_log_path: str,
+    tempest_trace: str,
+    service_logs: dict[str, str],
+) -> str:
+    sections = []
+
+    dns_cfg = read_tempest_dns_config()
+    if dns_cfg:
+        sections.append(f"=== Tempest DNS config ===\n{dns_cfg}\n")
+
+    sections.append(summarize_log_section("Tempest failure", tempest_trace or "No traceback captured."))
+
+    if os.path.isfile(tempest_log_path):
+        with open(tempest_log_path, encoding="utf-8", errors="replace") as f:
+            tempest_full = f.read()
+        sections.append(summarize_log_section("Tempest run log", tempest_full))
+
+    for service in sorted(service_logs):
+        sections.append(summarize_log_section(f"designate-{service}", service_logs[service]))
+
+    return "\n".join(sections)
+
+
+def save_service_logs(run_dir: str, service_logs: dict[str, str]) -> None:
+    logs_dir = os.path.join(run_dir, "designate_logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    for service, log in service_logs.items():
+        path = os.path.join(logs_dir, f"{service}.log")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(log or "")
 
 @tool("read_source")
 def read_source(test_path: str):
@@ -250,30 +430,33 @@ def designate_service_names(units: list[str]) -> str:
     return ", ".join(u.removeprefix("devstack@").removesuffix(".service") for u in units)
 
 
-def fetch_designate_logs(since: str) -> str:
-    units = designate_journal_units()
-    unit_flags = " ".join(f"-u {u}" for u in units)
-    cmd = f"sudo journalctl {unit_flags} --since '{since}' --no-pager"
-    try:
-        return subprocess.check_output(cmd, shell=True).decode("utf-8")
-    except subprocess.CalledProcessError:
-        return "No backend logs found."
-
-
 def run_stage_logic_discovery(test_path):
+    try:
+        source_bundle = load_test_source_bundle(test_path)
+    except FileNotFoundError as e:
+        print_result_panel("Stage 1 error", str(e), "red")
+        return str(e)
+
     print_stage_header(
         1, "Analyze test logic", "cyan",
-        "Reads the Tempest test source with read_source, then uses Ollama to explain "
-        "what the test does and what Designate behavior it expects.",
+        "Loads the test method and helper methods it calls from source, "
+        "then uses Ollama to explain the full end-to-end flow.",
         [llm_stage_line(), f"Test: {test_path}"],
     )
+
     task = Task(
         description=(
-            f"Use read_source on '{test_path}', then explain step-by-step what the test does. "
-            "Write a technical narrative only — no JSON, no tool-call syntax."
+            f"Analyze this Tempest test source (test method + helpers it calls):\n\n"
+            f"{source_bundle}\n\n"
+            "Explain step-by-step what the test does end-to-end. Include:\n"
+            "- Setup (zones, recordsets, API calls)\n"
+            "- DNS / propagation checks (dig, nameservers, ports)\n"
+            "- Waits, assertions, and expected Designate behavior\n"
+            "Base the narrative ONLY on the source above — do not guess or invent steps. "
+            "Plain prose only — no JSON, no tool-call syntax."
         ),
-        expected_output="Step-by-step breakdown of the test's Python logic.",
-        agent=analyst
+        expected_output="Complete step-by-step breakdown of the test flow.",
+        agent=analyst,
     )
     result = run_crew_task(task)
     print_result_panel(f"Test intent · {test_method_name(test_path)}", result, "cyan")
@@ -356,36 +539,48 @@ def run_stage_execution(test_path):
 
 
 def run_stage_root_cause(logic, trace, start_time, run_dir):
-    log_file = os.path.join(run_dir, "designate_services.log")
+    tempest_log_path = os.path.join(run_dir, "tempest_run.log")
     units = designate_journal_units()
     service_list = designate_service_names(units)
 
     print_stage_header(
         3, "Root-cause analysis", "magenta",
-        "Pulls journal logs from all Designate services from the test window, "
-        "then uses Ollama to correlate logs with the test intent and failure traceback.",
+        "Collects Tempest output and per-service Designate journal logs, "
+        "builds a structured evidence report, then uses Ollama for a verdict.",
         [llm_stage_line(), f"Logs since: {start_time}", f"Services: {service_list}"],
     )
 
-    logs = fetch_designate_logs(start_time)
-    with open(log_file, "w") as f:
-        f.write(logs)
+    service_logs = fetch_designate_logs_by_service(start_time)
+    save_service_logs(run_dir, service_logs)
+
+    evidence = build_log_evidence_report(tempest_log_path, trace, service_logs)
+    evidence_path = os.path.join(run_dir, "log_evidence.txt")
+    with open(evidence_path, "w", encoding="utf-8") as f:
+        f.write(evidence)
+
+    # Show deterministic report first (truncated for terminal if very long)
+    display = evidence if len(evidence) <= 12000 else evidence[:12000] + "\n… (see log_evidence.txt for full report)"
+    print_result_panel("Log evidence report", display, "magenta")
 
     task = Task(
         description=(
-            f"FINAL INVESTIGATION:\n\n"
+            f"FINAL INVESTIGATION — base your answer ONLY on the evidence below.\n"
+            "Do not invent errors, services, or log lines that are not present.\n\n"
             f"TEST INTENT:\n{logic}\n\n"
-            f"FAILURE / TRACEBACK:\n{trace}\n\n"
-            f"DESIGNATE LOGS (all services: {service_list}):\n{logs[-12000:]}\n\n"
-            "Explain why the backend failed. Name the failing Designate service "
-            "(api, central, producer, worker, mdns) and the error. "
+            f"LOG EVIDENCE (Tempest + each Designate service):\n{evidence[:14000]}\n\n"
+            "Summarize:\n"
+            "1. What failed in Tempest (client-side vs backend)\n"
+            "2. Which Designate service(s) show errors, if any\n"
+            "3. Services with 'no errors detected' — state that explicitly\n"
+            "4. Most likely root cause linking test intent, traceback, and log evidence\n"
             "Plain prose only — no JSON, no tool-call syntax."
         ),
-        expected_output="Root cause verdict in plain language.",
-        agent=analyst
+        expected_output="Root cause verdict grounded in the log evidence.",
+        agent=analyst,
     )
     result = run_crew_task(task)
     print_result_panel("Root cause verdict", result, "magenta")
+    console.print(rich_text(f"Full evidence: {evidence_path}"), style="dim")
     return result
 
 

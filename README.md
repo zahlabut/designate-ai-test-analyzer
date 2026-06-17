@@ -25,9 +25,9 @@ When you run `main.py`, the CLI prints this pipeline before test selection:
 | Phase | What it does |
 |-------|--------------|
 | **Setup** | Verify Ollama and `tempest.conf`; discover tests with `stestr list` (optional grep); pick one by index |
-| **Stage 1** | Ollama calls `read_source` to load the test method, then explains what it checks and expected Designate behavior |
+| **Stage 1** | Loads the test method **and helper methods it calls** from source, then Ollama explains the full end-to-end flow (API, DNS checks, propagation) |
 | **Stage 2** | Runs `stestr run --serial` against DevStack; full output saved under `/opt/stack/agent_runs/run_<timestamp>/` |
-| **Stage 3** | **FAIL only** — pulls journal logs from **all Designate services** (api, central, producer, worker, mdns) from the run window; Ollama correlates logs with the traceback and Stage 1 intent |
+| **Stage 3** | **FAIL only** — builds a **log evidence report** (Tempest traceback + run log + each Designate service separately); services with no errors are labeled explicitly; Ollama verdict is grounded in that report |
 
 **Stage 2 outcomes:** PASS or SKIP → done · FAIL → Stage 3
 
@@ -374,4 +374,4 @@ If the test is **skipped** (e.g. missing test data file), Stage 2 prints the ski
 |------|---------|
 | `main.py` | Agent definition, tools, and stage orchestration |
 | `requirements.txt` | Python dependencies (`crewai`, `rich`) |
-| `/opt/stack/agent_runs/` | Runtime artifacts (tempest logs, designate logs) per run |
+| `/opt/stack/agent_runs/run_<timestamp>/` | Per-run artifacts: `tempest_run.log`, `log_evidence.txt`, `designate_logs/*.log` |
