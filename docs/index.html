@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Example output — Designate AI Test Analyzer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav class="nav-links">
+    <a href="https://github.com/zahlabut/designate-ai-test-analyzer#readme">← README on GitHub</a>
+    <a href="example-pass.html">PASS example</a>
+    <a href="example-fail.html">FAIL example</a>
+  </nav>
+
+  <header class="page-header">
+    <h1>Designate AI Test Analyzer — example runs</h1>
+    <p class="meta">Static snapshots of CLI output from a DevStack Noble VM (llama3.1:latest).</p>
+    <p class="meta dim">Rendered via GitHub Pages — not raw source in the repo browser.</p>
+  </header>
+
+  <div class="cards">
+    <a class="card pass" href="example-pass.html">
+      <h2><span class="badge pass">PASS</span> Propagation test succeeds</h2>
+      <p><code>test_update_records_propagated_to_backends_07_MX_under_APEX</code> — Stages 1–2 only; run summary shows PASS.</p>
+    </a>
+    <a class="card fail" href="example-fail.html">
+      <h2><span class="badge fail">FAIL</span> Propagation test + root cause</h2>
+      <p><code>test_update_records_propagated_to_backends_14_NAPTR_Record</code> — wrong nameserver port in tempest.conf; full Stage 3 analysis.</p>
+    </a>
+  </div>
+
+  <footer>
+    <a href="https://github.com/zahlabut/designate-ai-test-analyzer">designate-ai-test-analyzer</a> on GitHub
+  </footer>
+</body>
+</html>
