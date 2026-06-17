@@ -30,7 +30,7 @@ Autonomous diagnostic agent for OpenStack Designate Tempest failures. It reads t
 
 ### Example output
 
-Rendered in the browser via **GitHub Pages** (repo links show raw HTML source — use these instead):
+Rendered in the browser via **GitHub Pages**. If links return **404**, enable Pages once — see [Enable GitHub Pages](#enable-github-pages) (takes ~1 minute).
 
 | Outcome | Example |
 |---------|---------|
@@ -39,7 +39,20 @@ Rendered in the browser via **GitHub Pages** (repo links show raw HTML source �
 
 All examples: [zahlabut.github.io/designate-ai-test-analyzer/](https://zahlabut.github.io/designate-ai-test-analyzer/)
 
-**One-time setup (repo owner):** GitHub → Settings → Pages → Build and deployment → Source: **GitHub Actions**. Push to `master` runs `.github/workflows/pages.yml` and publishes the `docs/` folder.
+---
+
+## Enable GitHub Pages
+
+GitHub does **not** publish the site automatically. Until Pages is enabled, every link above returns 404 even though `docs/` is already in the repo.
+
+**Recommended (no workflow needed):**
+
+1. Open **[Settings → Pages](https://github.com/zahlabut/designate-ai-test-analyzer/settings/pages)** for this repo.
+2. **Build and deployment → Source:** select **Deploy from a branch**.
+3. **Branch:** `master` · **Folder:** `/docs` → click **Save**.
+4. Wait 1–2 minutes. Refresh [the site](https://zahlabut.github.io/designate-ai-test-analyzer/) — you should see the examples index.
+
+**Alternative (GitHub Actions):** push `.github/workflows/pages.yml`, then set Source to **GitHub Actions** on the same Settings → Pages screen. The workflow publishes `docs/` on every push to `master`.
 
 ---
 
