@@ -2,6 +2,7 @@ import subprocess
 import os
 import sys
 import re
+import json
 import importlib.util
 import urllib.error
 import urllib.request
@@ -26,21 +27,100 @@ def configure_llm():
     return base, os.environ["OPENAI_MODEL_NAME"]
 
 
-def verify_llm_connection(base_url):
-    """Return (ok, error_message)."""
+def ollama_api_model_name(configured_model: str) -> str:
+    """Model id Ollama expects (CrewAI strips the ollama/ prefix)."""
+    return configured_model.removeprefix("ollama/")
+
+
+def crewai_model_name(ollama_tag: str) -> str:
+    return f"ollama/{ollama_tag}" if not ollama_tag.startswith("ollama/") else ollama_tag
+
+
+def fetch_ollama_models(base_url: str) -> tuple[list[str], str | None]:
+    """Return (model_names, error_message)."""
     url = f"{base_url.rstrip('/')}/api/tags"
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
             if resp.status != 200:
-                return False, f"Ollama returned HTTP {resp.status} from {url}"
+                return [], f"Ollama returned HTTP {resp.status} from {url}"
+            data = json.loads(resp.read().decode())
     except urllib.error.URLError as e:
-        return False, (
+        return [], (
             f"Cannot reach Ollama at {base_url} ({e.reason}).\n"
-            "Start Ollama on this host or set OLLAMA_BASE_URL to the machine running it, e.g.:\n"
-            "  export OLLAMA_BASE_URL=http://10.9.95.131:11434"
+            "Start the Podman container or set OLLAMA_BASE_URL, e.g.:\n"
+            "  export OLLAMA_BASE_URL=http://127.0.0.1:11434"
         )
     except Exception as e:
-        return False, f"Cannot reach Ollama at {base_url}: {e}"
+        return [], f"Cannot reach Ollama at {base_url}: {e}"
+
+    models = sorted({m.get("name", "") for m in data.get("models", []) if m.get("name")})
+    return models, None
+
+
+def resolve_model_in_list(configured_model: str, available: list[str]) -> str | None:
+    requested = ollama_api_model_name(configured_model)
+    if requested in available:
+        return requested
+    matches = [
+        name for name in available
+        if name == requested or name.startswith(f"{requested}:") or name.split(":")[0] == requested
+    ]
+    return matches[0] if matches else None
+
+
+def set_active_ollama_model(ollama_tag: str) -> str:
+    global OLLAMA_MODEL
+    OLLAMA_MODEL = crewai_model_name(ollama_tag)
+    os.environ["OPENAI_MODEL_NAME"] = OLLAMA_MODEL
+    return OLLAMA_MODEL
+
+
+def prompt_model_selection(models: list[str]) -> str:
+    while True:
+        choice = input(f"\nSelect Ollama model [0-{len(models) - 1}]: ").strip()
+        if not choice.isdigit():
+            console.print("[yellow]Enter a number from the list.[/yellow]")
+            continue
+        idx = int(choice)
+        if 0 <= idx < len(models):
+            return models[idx]
+        console.print(f"[yellow]Invalid index — use 0 to {len(models) - 1}.[/yellow]")
+
+
+def setup_ollama_model(base_url: str) -> tuple[bool, str | None]:
+    """Connect to Ollama, list models, and pick one. Returns (ok, error_message)."""
+    models, err = fetch_ollama_models(base_url)
+    if err:
+        return False, err
+    if not models:
+        return False, (
+            "No models found in Ollama.\n"
+            "Pull one into the Podman container, e.g.:\n"
+            "  podman exec -it ollama ollama pull llama3.2:1b"
+        )
+
+    selected = None
+    if "OLLAMA_MODEL" in os.environ:
+        selected = resolve_model_in_list(os.environ["OLLAMA_MODEL"], models)
+        if selected:
+            console.print(f"[dim]Using OLLAMA_MODEL: {crewai_model_name(selected)}[/dim]")
+        else:
+            console.print(
+                f"[yellow]OLLAMA_MODEL={os.environ['OLLAMA_MODEL']} not found — choose from list.[/yellow]"
+            )
+
+    if not selected:
+        if len(models) == 1:
+            selected = models[0]
+            console.print(f"[dim]Using Ollama model: {selected}[/dim]")
+        else:
+            console.print()
+            console.print("[bold]Available Ollama models[/bold]")
+            for i, name in enumerate(models):
+                console.print(Text.assemble((f"{i:>3}  ", "dim cyan"), (name, "white")))
+            selected = prompt_model_selection(models)
+
+    set_active_ollama_model(selected)
     return True, None
 
 
@@ -706,12 +786,12 @@ if __name__ == "__main__":
         border_style="green",
     ))
     print_tool_flow()
-    console.print(rich_text(f"LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE}"), justify="left")
 
-    llm_ok, llm_error = verify_llm_connection(OLLAMA_BASE)
+    llm_ok, llm_error = setup_ollama_model(OLLAMA_BASE)
     if not llm_ok:
         print_result_panel("Startup error", llm_error, "red")
         sys.exit(1)
+    console.print(rich_text(f"LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE}"), justify="left")
 
     cfg_ok, cfg_msg = verify_tempest_config()
     if not cfg_ok:

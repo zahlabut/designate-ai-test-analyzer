@@ -24,7 +24,7 @@ When you run `main.py`, the CLI prints this pipeline before test selection:
 
 | Phase | What it does |
 |-------|--------------|
-| **Setup** | Verify Ollama and `tempest.conf`; discover tests with `stestr list` (optional grep); pick one by index |
+| **Setup** | Verify Ollama and `tempest.conf`; list Ollama models (pick one if several); discover tests with `stestr list` (optional grep); pick one by index |
 | **Stage 1** | Loads the test method **and helper methods it calls** from source, then Ollama explains the full end-to-end flow (API, DNS checks, propagation) |
 | **Stage 2** | Runs `stestr run --serial` against DevStack; full output saved under `/opt/stack/agent_runs/run_<timestamp>/` |
 | **Stage 3** | **FAIL only** — builds a **log evidence report** (Tempest traceback + run log + each Designate service separately); services with no errors are labeled explicitly; Ollama verdict is grounded in that report |
@@ -195,14 +195,14 @@ On startup you should see the **tool flow** diagram (above), then:
 LLM: ollama/llama3.2:1b @ http://127.0.0.1:11434
 ```
 
-The script checks Ollama connectivity before starting AI stages. If it fails, fix Ollama first (steps 4–5).
+The script checks Ollama connectivity and lists pulled models before AI stages. If several models exist, you pick one; if only one exists, it is used automatically.
 
 #### Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama HTTP endpoint (no `/v1` suffix) |
-| `OLLAMA_MODEL` | `ollama/llama3.2:1b` | Model name passed to CrewAI |
+| `OLLAMA_MODEL` | *(auto)* | Optional — skip model picker when set to a pulled model (e.g. `ollama/llama3.2:1b`) |
 
 Example — Ollama on a remote host (same model):
 
