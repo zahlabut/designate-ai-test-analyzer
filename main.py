@@ -19,7 +19,7 @@ console = Console()
 def configure_llm():
     """Configure CrewAI to use a local/remote Ollama OpenAI-compatible endpoint."""
     base = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-    model = os.environ.get("OLLAMA_MODEL", "ollama/llama3.1")
+    model = os.environ.get("OLLAMA_MODEL", "ollama/llama3.2:1b")
     os.environ.setdefault("OPENAI_API_BASE", f"{base}/v1")
     os.environ.setdefault("OPENAI_MODEL_NAME", model)
     os.environ.setdefault("OPENAI_API_KEY", "ollama")
