@@ -17,14 +17,12 @@ console = Console()
 
 # --- CONFIGURATION ---
 
-def configure_llm():
-    """Configure CrewAI to use a local/remote Ollama OpenAI-compatible endpoint."""
+def configure_ollama_env() -> str:
+    """Set Ollama API endpoint for CrewAI. Model is chosen later in setup_ollama_model()."""
     base = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-    model = os.environ.get("OLLAMA_MODEL", "ollama/llama3.2:1b")
     os.environ.setdefault("OPENAI_API_BASE", f"{base}/v1")
-    os.environ.setdefault("OPENAI_MODEL_NAME", model)
     os.environ.setdefault("OPENAI_API_KEY", "ollama")
-    return base, os.environ["OPENAI_MODEL_NAME"]
+    return base
 
 
 def ollama_api_model_name(configured_model: str) -> str:
@@ -72,6 +70,7 @@ def set_active_ollama_model(ollama_tag: str) -> str:
     global OLLAMA_MODEL
     OLLAMA_MODEL = crewai_model_name(ollama_tag)
     os.environ["OPENAI_MODEL_NAME"] = OLLAMA_MODEL
+    reset_analyst()
     return OLLAMA_MODEL
 
 
@@ -124,7 +123,8 @@ def setup_ollama_model(base_url: str) -> tuple[bool, str | None]:
     return True, None
 
 
-OLLAMA_BASE, OLLAMA_MODEL = configure_llm()
+OLLAMA_BASE = configure_ollama_env()
+OLLAMA_MODEL = ""  # populated by setup_ollama_model() before any CrewAI call
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
 TEMPEST_PATH = "/opt/stack/tempest"
@@ -364,14 +364,27 @@ def read_source(test_path: str):
 
 # --- AGENT ---
 
-analyst = Agent(
-    role='Designate Expert Architect',
-    goal='Explain and troubleshoot Designate E2E tests with clear, accurate technical summaries.',
-    backstory=f'You are an expert troubleshooter in this environment: {SYSTEM_CONTEXT}.',
-    tools=[read_source],
-    verbose=False,
-    allow_delegation=False
-)
+_analyst: Agent | None = None
+
+
+def reset_analyst() -> None:
+    global _analyst
+    _analyst = None
+
+
+def get_analyst() -> Agent:
+    """Build CrewAI agent after Ollama model is selected (Agent caches LLM at creation)."""
+    global _analyst
+    if _analyst is None:
+        _analyst = Agent(
+            role='Designate Expert Architect',
+            goal='Explain and troubleshoot Designate E2E tests with clear, accurate technical summaries.',
+            backstory=f'You are an expert troubleshooter in this environment: {SYSTEM_CONTEXT}.',
+            tools=[read_source],
+            verbose=False,
+            allow_delegation=False,
+        )
+    return _analyst
 
 
 # --- STAGE HANDLERS ---
@@ -400,7 +413,7 @@ def print_result_panel(title: str, body: str, style: str):
 
 
 def run_crew_task(task: Task) -> str:
-    return str(Crew(agents=[analyst], tasks=[task], verbose=False).kickoff())
+    return str(Crew(agents=[get_analyst()], tasks=[task], verbose=False).kickoff())
 
 
 def tempest_env() -> dict[str, str]:
@@ -568,7 +581,7 @@ def run_stage_logic_discovery(test_path):
             "Plain prose only — no JSON, no tool-call syntax."
         ),
         expected_output="Complete step-by-step breakdown of the test flow.",
-        agent=analyst,
+        agent=get_analyst(),
     )
     result = run_crew_task(task)
     print_result_panel(f"Test intent · {test_method_name(test_path)}", result, "cyan")
@@ -688,7 +701,7 @@ def run_stage_root_cause(logic, trace, start_time, run_dir):
             "Plain prose only — no JSON, no tool-call syntax."
         ),
         expected_output="Root cause verdict grounded in the log evidence.",
-        agent=analyst,
+        agent=get_analyst(),
     )
     result = run_crew_task(task)
     print_result_panel("Root cause verdict", result, "magenta")
