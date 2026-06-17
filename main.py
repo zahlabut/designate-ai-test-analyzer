@@ -47,6 +47,7 @@ def verify_llm_connection(base_url):
 OLLAMA_BASE, OLLAMA_MODEL = configure_llm()
 
 TEMPEST_PATH = "/opt/stack/tempest"
+TEMPEST_CONFIG = os.environ.get("TEMPEST_CONFIG", "/opt/stack/tempest/etc/tempest.conf")
 STESTR_BIN = os.environ.get("STESTR", "/opt/stack/data/venv/bin/stestr")
 BASE_HISTORY_DIR = "/opt/stack/agent_runs"
 
@@ -100,6 +101,26 @@ analyst = Agent(
 
 # --- STAGE HANDLERS ---
 
+def tempest_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["TEMPEST_CONFIG"] = TEMPEST_CONFIG
+    return env
+
+
+def verify_tempest_config() -> tuple[bool, str]:
+    if os.path.isfile(TEMPEST_CONFIG):
+        return True, TEMPEST_CONFIG
+    fallback = "/etc/tempest/tempest.conf"
+    if os.path.isfile(fallback):
+        return True, fallback
+    return False, (
+        f"Tempest config not found at {TEMPEST_CONFIG}.\n"
+        "DevStack creates it at /opt/stack/tempest/etc/tempest.conf — set:\n"
+        "  export TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf\n"
+        "Or symlink: sudo ln -sf /opt/stack/tempest/etc/tempest.conf /etc/tempest/tempest.conf"
+    )
+
+
 def parse_tempest_result(output: str, returncode: int) -> tuple[str, str]:
     """Return (status, detail). status is PASS, FAIL, or SKIP."""
     skip_match = re.search(r"SKIPPED:\s*(.+)", output)
@@ -140,8 +161,13 @@ def parse_tempest_result(output: str, returncode: int) -> tuple[str, str]:
     return "PASS", ""
 
 
+def llm_stage_line() -> str:
+    return f"Ollama ({OLLAMA_MODEL}) via CrewAI @ {OLLAMA_BASE}"
+
+
 def run_stage_logic_discovery(test_path):
     console.print(f"\n[bold blue]🔎 STAGE 1: ANALYZING TEST LOGIC...[/bold blue]")
+    console.print(f"[dim]{llm_stage_line()}[/dim]")
     task = Task(
         description=(
             f"1. Use 'read_source' for '{test_path}'.\n"
@@ -172,6 +198,7 @@ def run_stage_execution(test_path):
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     console.print(f"\n[bold yellow]🚀 STAGE 2: EXECUTING FRESH TEST RUN...[/bold yellow]")
+    console.print(f"[dim]TEMPEST_CONFIG={TEMPEST_CONFIG}[/dim]")
     console.print(f"[dim]stestr run --serial {test_path}[/dim]")
 
     process = subprocess.Popen(
@@ -179,6 +206,7 @@ def run_stage_execution(test_path):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         cwd=TEMPEST_PATH,
+        env=tempest_env(),
         text=True,
         bufsize=1,
     )
@@ -212,6 +240,7 @@ def run_stage_execution(test_path):
 
 def run_stage_root_cause(logic, trace, start_time, run_dir):
     console.print(f"\n[bold magenta]🔍 STAGE 3: GATHERING LOGS & CORRELATING...[/bold magenta]")
+    console.print(f"[dim]{llm_stage_line()}[/dim]")
 
     log_file = os.path.join(run_dir, "designate_services.log")
     cmd = f"sudo journalctl -u devstack@designate-central.service -u devstack@designate-worker.service --since '{start_time}' --no-pager"
@@ -244,6 +273,7 @@ def get_full_test_list(grep_str=None):
     list_result = subprocess.run(
         [STESTR_BIN, "list"],
         cwd=TEMPEST_PATH,
+        env=tempest_env(),
         capture_output=True,
         text=True,
     )
@@ -282,6 +312,13 @@ if __name__ == "__main__":
         console.print("[red]Ollama is not reachable — AI stages cannot run:[/red]")
         console.print(Panel(Text(llm_error, style="red"), border_style="red"))
         sys.exit(1)
+
+    cfg_ok, cfg_msg = verify_tempest_config()
+    if not cfg_ok:
+        console.print("[red]Tempest config missing — stestr run will fail without credentials:[/red]")
+        console.print(Panel(Text(cfg_msg, style="red"), border_style="red"))
+        sys.exit(1)
+    console.print(f"[dim]Tempest config: {cfg_msg}[/dim]")
 
     grep_query = input("Grep tests (e.g. 'multipool') or ENTER for all: ").strip()
     tests, stestr_error = get_full_test_list(grep_query)

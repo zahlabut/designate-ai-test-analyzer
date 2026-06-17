@@ -88,13 +88,18 @@ These steps were validated on Ubuntu Noble DevStack (`devstack-noble-new`), usin
 ssh stack@<VM_IP>    # password: stack
 
 source /opt/stack/data/venv/bin/activate
-```
-
-Verify Tempest discovery works:
-
-```bash
+export TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf
 cd /opt/stack/tempest
 stestr list | grep designate | head
+```
+
+DevStack writes credentials to `/opt/stack/tempest/etc/tempest.conf`. Without `TEMPEST_CONFIG`, `stestr run` defaults to missing `/etc/tempest/tempest.conf` and fails with `Password is not defined`.
+
+One-time fix (optional — makes manual runs work without the export):
+
+```bash
+sudo mkdir -p /etc/tempest
+sudo ln -sf /opt/stack/tempest/etc/tempest.conf /etc/tempest/tempest.conf
 ```
 
 ### 2. Clone and install Python dependencies
@@ -264,6 +269,7 @@ With the DevStack venv still active:
 
 ```bash
 source /opt/stack/data/venv/bin/activate
+export TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf
 cd /opt/stack/designate-ai-test-analyzer
 python3 main.py
 ```
@@ -313,6 +319,7 @@ python3 main.py
 
 ```bash
 source /opt/stack/data/venv/bin/activate
+export TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf
 cd /opt/stack/designate-ai-test-analyzer
 python3 main.py
 ```
