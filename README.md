@@ -120,16 +120,9 @@ cd /opt/stack/tempest
 stestr list | grep designate | head
 ```
 
-Run one test manually (note `[id-...]` brackets must be escaped — `main.py` does this automatically):
+The analyzer uses `stestr` internally for discovery (`stestr list`) and execution (`stestr run --serial`) in Stage 2 — you do not need to run tests manually or escape `[id-...]` brackets yourself.
 
-```bash
-cd /opt/stack/tempest
-export TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf
-python3 -c "import re; print(re.escape('designate_tempest_plugin.tests.api.v2.test_unauthed.TestDnsUnauthed.test_update_recordset[id-0600f628-de94-11ed-8334-201e8823901f]'))" \
-  | xargs -I{} stestr run --serial {}
-```
-
-DevStack writes credentials to `/opt/stack/tempest/etc/tempest.conf`. Without `TEMPEST_CONFIG`, `stestr run` defaults to missing `/etc/tempest/tempest.conf` and fails with `Password is not defined`.
+DevStack writes credentials to `/opt/stack/tempest/etc/tempest.conf`. Without `TEMPEST_CONFIG`, `stestr` defaults to missing `/etc/tempest/tempest.conf` and fails with `Password is not defined`.
 
 One-time fix (optional — makes manual runs work without the export):
 
@@ -163,30 +156,9 @@ cd /opt/stack/tempest
 stestr list | grep designate | head
 ```
 
-### 4. Install and run Ollama
+### 4. Install and run Ollama (Podman)
 
-Ollama provides the local LLM. It can run **natively** (system service) or in **Podman** — use one, not both on port 11434.
-
-#### Check for an existing Ollama instance first
-
-```bash
-ss -tlnp | grep 11434
-curl -s http://127.0.0.1:11434/api/tags
-ps aux | grep '[o]llama serve'
-podman ps -a
-```
-
-If `curl` returns model JSON, Ollama is already running — skip installation and go to [pull a model](#pull-a-model).
-
-#### Option A: Native Ollama (recommended on DevStack)
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-sudo systemctl enable --now ollama
-curl -s http://127.0.0.1:11434/api/tags
-```
-
-#### Option B: Ollama via Podman
+Ollama provides the local LLM. Run it in a Podman container on the DevStack VM.
 
 Install Podman:
 
@@ -219,13 +191,6 @@ EOF
 Choose a model that fits your VM RAM (see [hardware requirements](#vm-hardware-requirements-devstack--ollama-on-same-host)). On a **16 GiB** DevStack VM, prefer a small model:
 
 ```bash
-# Native Ollama
-ollama pull llama3.2:1b
-
-# Or via HTTP API (works for native or Podman)
-curl -X POST http://127.0.0.1:11434/api/pull -d '{"name":"llama3.2:1b"}'
-
-# Podman
 podman exec -it ollama ollama pull llama3.2:1b
 ```
 
@@ -253,20 +218,10 @@ The VM is too small for the chosen model with DevStack running. Either:
 
 #### `bind: address already in use` on port 11434
 
-Something is already listening on 11434. Check whether Ollama is already running:
-
-```bash
-ss -tlnp | grep 11434
-curl -s http://127.0.0.1:11434/api/tags
-podman ps -a
-```
-
-- **If `curl` returns model JSON** — Ollama is already up (often a native `ollama serve`). Skip `podman run`, remove any dead container with `podman rm -f ollama`, and pull models via `ollama pull` or the HTTP API.
-- **If you need a fresh Podman container** — remove the failed one, free the port, then re-run:
+Port 11434 is already taken — often a leftover `ollama` container. Remove it and start fresh:
 
 ```bash
 podman rm -f ollama
-# stop whatever holds 11434 (see ss/lsof output), then:
 podman run -d \
   --name ollama \
   -p 127.0.0.1:11434:11434 \
@@ -274,7 +229,7 @@ podman run -d \
   docker.io/ollama/ollama
 ```
 
-- **If you cannot free port 11434** — run Ollama on a different host port:
+If you cannot use port 11434, map a different host port:
 
 ```bash
 podman rm -f ollama
@@ -295,7 +250,7 @@ The container failed to start (often due to a port conflict). Run `podman ps -a`
 #### Smaller model (limited RAM)
 
 ```bash
-curl -X POST http://127.0.0.1:11434/api/pull -d '{"name":"llama3.2:1b"}'
+podman exec -it ollama ollama pull llama3.2:1b
 export OLLAMA_MODEL=ollama/llama3.2:1b
 ```
 
@@ -346,7 +301,7 @@ python3 main.py
 | DevStack venv | `source /opt/stack/data/venv/bin/activate` before `stestr` and `main.py` |
 | `designate-tempest-plugin` | Installed in Tempest environment |
 | `stestr list` working | See crypto fix in step 3 if discovery fails |
-| Ollama | Native install, Podman container, or remote instance |
+| Ollama | Podman container on the DevStack VM (or remote instance for larger models) |
 | `sudo` | Required for `journalctl` log extraction in Stage 3 |
 
 ---
