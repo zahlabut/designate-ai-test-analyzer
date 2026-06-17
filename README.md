@@ -30,29 +30,26 @@ Autonomous diagnostic agent for OpenStack Designate Tempest failures. It reads t
 
 ### Example output
 
-Rendered in the browser via **GitHub Pages**. If links return **404**, enable Pages once — see [Enable GitHub Pages](#enable-github-pages) (takes ~1 minute).
+Click to open **rendered** examples in the browser (no GitHub Pages setup required):
 
 | Outcome | Example |
 |---------|---------|
-| **PASS** — Stage 3 skipped | [example-pass.html](https://zahlabut.github.io/designate-ai-test-analyzer/example-pass.html) — `test_update_records_propagated_to_backends_07_MX_under_APEX` |
-| **FAIL** — Stage 3 root-cause analysis | [example-fail.html](https://zahlabut.github.io/designate-ai-test-analyzer/example-fail.html) — `test_update_records_propagated_to_backends_14_NAPTR_Record` (wrong nameserver port in `tempest.conf`) |
+| **PASS** — Stage 3 skipped | [View PASS run](https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/example-pass.html) — `test_update_records_propagated_to_backends_07_MX_under_APEX` |
+| **FAIL** — Stage 3 root-cause analysis | [View FAIL run](https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/example-fail.html) — `test_update_records_propagated_to_backends_14_NAPTR_Record` (wrong nameserver port in `tempest.conf`) |
 
-All examples: [zahlabut.github.io/designate-ai-test-analyzer/](https://zahlabut.github.io/designate-ai-test-analyzer/)
+Index: [all examples](https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/index.html)
 
----
+<details>
+<summary>Optional: GitHub Pages (custom domain-style URL)</summary>
 
-## Enable GitHub Pages
+If you prefer `zahlabut.github.io/designate-ai-test-analyzer/` over htmlpreview:
 
-GitHub does **not** publish the site automatically. Until Pages is enabled, every link above returns 404 even though `docs/` is already in the repo.
+1. [Settings → Pages](https://github.com/zahlabut/designate-ai-test-analyzer/settings/pages)
+2. Source: **Deploy from a branch** → `master` / **`/docs`** → Save
+3. Wait 1–2 minutes
 
-**Recommended (no workflow needed):**
-
-1. Open **[Settings → Pages](https://github.com/zahlabut/designate-ai-test-analyzer/settings/pages)** for this repo.
-2. **Build and deployment → Source:** select **Deploy from a branch**.
-3. **Branch:** `master` · **Folder:** `/docs` → click **Save**.
-4. Wait 1–2 minutes. Refresh [the site](https://zahlabut.github.io/designate-ai-test-analyzer/) — you should see the examples index.
-
-**Alternative (GitHub Actions):** push `.github/workflows/pages.yml`, then set Source to **GitHub Actions** on the same Settings → Pages screen. The workflow publishes `docs/` on every push to `master`.
+Do **not** use the GitHub Actions source unless Pages is already enabled — the deploy workflow fails at “Setup Pages” otherwise.
+</details>
 
 ---
 
@@ -167,6 +164,5 @@ The tool creates `/etc/tempest/tempest.conf` → DevStack config if missing (`su
 | `conf.ini` | All tool settings (Ollama, Tempest paths, artifact directory) |
 | `main.py` | Stage orchestration and CLI |
 | `requirements.txt` | Python dependencies |
-| `docs/` | GitHub Pages site — rendered example output (`index.html`, `example-pass.html`, `example-fail.html`) |
-| `.github/workflows/pages.yml` | Publishes `docs/` to GitHub Pages on push to `master` |
+| `docs/` | Example output HTML (linked from README via htmlpreview; optional GitHub Pages from `/docs`) |
 | `/opt/stack/agent_runs/run_<timestamp>/` | `tempest_run.log`, `log_evidence.txt`, `designate_logs/*.log` |

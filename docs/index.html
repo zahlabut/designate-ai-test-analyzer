@@ -4,27 +4,220 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Example output — Designate AI Test Analyzer</title>
-  <link rel="stylesheet" href="style.css">
+  <style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --dim: #8b949e;
+  --cyan: #39c5cf;
+  --yellow: #d29922;
+  --green: #3fb950;
+  --red: #f85149;
+  --magenta: #bc8cff;
+  --white: #f0f6fc;
+  --code-bg: #21262d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 1.5rem;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.page-header {
+  max-width: 1100px;
+  margin: 0 auto 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-header h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--white);
+}
+
+.meta { margin: 0.25rem 0; }
+.meta.dim { color: var(--dim); font-size: 12px; }
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.badge.pass { background: rgba(63, 185, 80, 0.2); color: var(--green); }
+.badge.fail { background: rgba(248, 81, 73, 0.2); color: var(--red); }
+
+.nav-links {
+  max-width: 1100px;
+  margin: 0 auto 1rem;
+  font-size: 12px;
+}
+
+.nav-links a {
+  color: var(--cyan);
+  text-decoration: none;
+  margin-right: 1rem;
+}
+
+.nav-links a:hover { text-decoration: underline; }
+
+.terminal {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+}
+
+.panel-title {
+  padding: 0.35rem 0.75rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.panel-body {
+  padding: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.panel-header .panel-title { color: var(--white); }
+.panel-cyan .panel-title { color: var(--cyan); }
+.panel-yellow .panel-title { color: var(--yellow); }
+.panel-green .panel-title { color: var(--green); }
+.panel-red .panel-title { color: var(--red); }
+.panel-magenta .panel-title { color: var(--magenta); }
+.panel-summary .panel-title { color: var(--green); }
+.panel-summary.fail .panel-title { color: var(--red); }
+
+.diagram {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--dim);
+  line-height: 1.4;
+}
+
+.diagram .cyan { color: var(--cyan); }
+.diagram .yellow { color: var(--yellow); }
+.diagram .magenta { color: var(--magenta); }
+
+.line { margin: 0.15rem 0; }
+.line.dim { color: var(--dim); }
+.line.info { color: var(--text); }
+.line.ok { color: var(--green); }
+
+.list-tests {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.list-tests .selected { color: var(--cyan); font-weight: 600; }
+
+code {
+  background: var(--code-bg);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+footer {
+  max-width: 1100px;
+  margin: 2rem auto 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.cards {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  display: block;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.15s;
+}
+
+.card:hover {
+  border-color: var(--cyan);
+}
+
+.card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: var(--white);
+}
+
+.card p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.card.pass { border-left: 3px solid var(--green); }
+.card.fail { border-left: 3px solid var(--red); }
+
+  </style>
 </head>
 <body>
   <nav class="nav-links">
     <a href="https://github.com/zahlabut/designate-ai-test-analyzer#readme">← README on GitHub</a>
-    <a href="example-pass.html">PASS example</a>
-    <a href="example-fail.html">FAIL example</a>
+    <a href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/example-pass.html">PASS example</a>
+    <a href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/example-fail.html">FAIL example</a>
   </nav>
 
   <header class="page-header">
     <h1>Designate AI Test Analyzer — example runs</h1>
     <p class="meta">Static snapshots of CLI output from a DevStack Noble VM (llama3.1:latest).</p>
-    <p class="meta dim">Rendered via GitHub Pages — not raw source in the repo browser.</p>
+    <p class="meta dim">Static CLI output snapshots — open from README links for rendered view in the browser.</p>
   </header>
 
   <div class="cards">
-    <a class="card pass" href="example-pass.html">
+    <a class="card pass" href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/example-pass.html">
       <h2><span class="badge pass">PASS</span> Propagation test succeeds</h2>
       <p><code>test_update_records_propagated_to_backends_07_MX_under_APEX</code> — Stages 1–2 only; run summary shows PASS.</p>
     </a>
-    <a class="card fail" href="example-fail.html">
+    <a class="card fail" href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/example-fail.html">
       <h2><span class="badge fail">FAIL</span> Propagation test + root cause</h2>
       <p><code>test_update_records_propagated_to_backends_14_NAPTR_Record</code> — wrong nameserver port in tempest.conf; full Stage 3 analysis.</p>
     </a>
