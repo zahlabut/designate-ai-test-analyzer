@@ -45,6 +45,7 @@ def verify_llm_connection(base_url):
 
 
 OLLAMA_BASE, OLLAMA_MODEL = configure_llm()
+os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
 TEMPEST_PATH = "/opt/stack/tempest"
 TEMPEST_CONFIG = os.environ.get("TEMPEST_CONFIG", "/opt/stack/tempest/etc/tempest.conf")
@@ -91,15 +92,42 @@ def read_source(test_path: str):
 
 analyst = Agent(
     role='Designate Expert Architect',
-    goal='Explain and troubleshoot Designate E2E tests stage by stage with maximum detail.',
-    backstory=f'You are an expert troubleshooter in this environment: {SYSTEM_CONTEXT}. Your priority is providing clear, human-readable technical summaries of each stage.',
+    goal='Explain and troubleshoot Designate E2E tests with clear, accurate technical summaries.',
+    backstory=f'You are an expert troubleshooter in this environment: {SYSTEM_CONTEXT}.',
     tools=[read_source],
-    verbose=True,  # Keeps the internal tool usage visible in console if needed
+    verbose=False,
     allow_delegation=False
 )
 
 
 # --- STAGE HANDLERS ---
+
+def rich_text(value: str) -> Text:
+    """Plain text safe for Rich (avoids [id-...] being parsed as markup)."""
+    return Text(value)
+
+
+def test_method_name(test_path: str) -> str:
+    return test_path.split("[")[0].rsplit(".", 1)[-1]
+
+
+def print_stage_header(number: int, title: str, style: str, description: str, meta: list[str] | None = None):
+    body = Text(description, style=style)
+    if meta:
+        body.append("\n")
+        for line in meta:
+            body.append(line + "\n", style="dim")
+    console.print()
+    console.print(Panel(body, title=f"[bold {style}]Stage {number} · {title}[/bold {style}]", border_style=style))
+
+
+def print_result_panel(title: str, body: str, style: str):
+    console.print(Panel(rich_text(body), title=title, border_style=style))
+
+
+def run_crew_task(task: Task) -> str:
+    return str(Crew(agents=[analyst], tasks=[task], verbose=False).kickoff())
+
 
 def tempest_env() -> dict[str, str]:
     env = os.environ.copy()
@@ -186,32 +214,24 @@ def parse_tempest_result(output: str, returncode: int) -> tuple[str, str]:
     return "PASS", ""
 
 
-def llm_stage_line() -> str:
-    return f"Ollama ({OLLAMA_MODEL}) via CrewAI @ {OLLAMA_BASE}"
-
-
 def run_stage_logic_discovery(test_path):
-    console.print(f"\n[bold blue]🔎 STAGE 1: ANALYZING TEST LOGIC...[/bold blue]")
-    console.print(f"[dim]{llm_stage_line()}[/dim]")
+    print_stage_header(
+        1, "Analyze test logic", "cyan",
+        "Reads the Tempest test source with read_source, then uses Ollama to explain "
+        "what the test does and what Designate behavior it expects.",
+        [llm_stage_line(), f"Test: {test_path}"],
+    )
     task = Task(
         description=(
-            f"1. Use 'read_source' for '{test_path}'.\n"
-            f"2. Analyze the code.\n"
-            f"3. Output a clear, detailed explanation of what the test is doing step-by-step. "
-            "Do not output JSON. Output a technical narrative."
+            f"Use read_source on '{test_path}', then explain step-by-step what the test does. "
+            "Write a technical narrative only — no JSON, no tool-call syntax."
         ),
-        expected_output="A step-by-step technical breakdown of the test's Python logic.",
+        expected_output="Step-by-step breakdown of the test's Python logic.",
         agent=analyst
     )
-    result = Crew(agents=[analyst], tasks=[task]).kickoff()
-
-    # We display the result of the AI's analysis, not the tool call itself
-    console.print(Panel(
-        Text(str(result), style="cyan"),
-        title=f"PROBED LOGIC: {test_path.split('.')[-1]}",
-        border_style="cyan"
-    ))
-    return str(result)
+    result = run_crew_task(task)
+    print_result_panel(f"Test intent · {test_method_name(test_path)}", result, "cyan")
+    return result
 
 
 def run_stage_execution(test_path):
@@ -222,14 +242,20 @@ def run_stage_execution(test_path):
     output_log = os.path.join(run_dir, "tempest_run.log")
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    console.print(f"\n[bold yellow]🚀 STAGE 2: EXECUTING FRESH TEST RUN...[/bold yellow]")
-    console.print(f"[dim]TEMPEST_CONFIG={TEMPEST_CONFIG}[/dim]")
-    console.print(f"[dim]cwd={TEMPEST_PATH}[/dim]")
-    console.print(f"[dim]Test id: {test_path}[/dim]")
-
     run_filter = stestr_run_filter(test_path)
-    console.print(f"[dim]stestr run --serial {run_filter}[/dim]")
 
+    print_stage_header(
+        2, "Run Tempest test", "yellow",
+        "Executes the selected test with stestr against DevStack (no LLM). "
+        "Uses tempest.conf credentials and saves full output to agent_runs/.",
+        [
+            f"TEMPEST_CONFIG={TEMPEST_CONFIG}",
+            f"cwd={TEMPEST_PATH}",
+            f"stestr run --serial {run_filter}",
+        ],
+    )
+
+    console.print("[yellow]Running…[/yellow] ", end="")
     process = subprocess.Popen(
         [STESTR_BIN, "run", "--serial", run_filter],
         stdout=subprocess.PIPE,
@@ -250,32 +276,54 @@ def run_stage_execution(test_path):
                 sys.stdout.flush()
 
     process.wait()
+    console.print()  # newline after progress dots
     output_str = "".join(full_output)
     status, detail = parse_tempest_result(output_str, process.returncode)
 
     if status == "PASS":
-        console.print(f"\n[bold green]Result: PASS[/bold green]")
+        print_result_panel(
+            "Execution result · PASS",
+            f"Tempest reported success.\n\nLog: {output_log}\nArtifacts: {run_dir}",
+            "green",
+        )
     elif status == "SKIP":
-        console.print(f"\n[bold yellow]Result: SKIPPED[/bold yellow]")
-        console.print(Panel(Text(detail, style="yellow"), title="Skip reason", border_style="yellow"))
+        print_result_panel(
+            "Execution result · SKIPPED",
+            f"{detail}\n\nLog: {output_log}\nArtifacts: {run_dir}",
+            "yellow",
+        )
     elif status == "NOT_RUN":
-        console.print(f"\n[bold red]Result: NOT RUN[/bold red]")
-        console.print(Panel(Text(detail, style="red"), title="Test did not execute", border_style="red"))
+        print_result_panel(
+            "Execution result · NOT RUN",
+            f"{detail}\n\nLog: {output_log}\nArtifacts: {run_dir}",
+            "red",
+        )
     else:
-        console.print(f"\n[bold red]Result: FAIL[/bold red]")
-
-    console.print(f"[dim]Artifacts folder: {run_dir}[/dim]")
-    console.print(f"[dim]Full log: {output_log}[/dim]")
+        summary = detail[:1500] + ("…" if len(detail) > 1500 else "")
+        print_result_panel(
+            "Execution result · FAIL",
+            f"{summary}\n\nFull traceback in log: {output_log}\nArtifacts: {run_dir}",
+            "red",
+        )
 
     return status, detail, start_time, run_dir
 
 
 def run_stage_root_cause(logic, trace, start_time, run_dir):
-    console.print(f"\n[bold magenta]🔍 STAGE 3: GATHERING LOGS & CORRELATING...[/bold magenta]")
-    console.print(f"[dim]{llm_stage_line()}[/dim]")
-
     log_file = os.path.join(run_dir, "designate_services.log")
-    cmd = f"sudo journalctl -u devstack@designate-central.service -u devstack@designate-worker.service --since '{start_time}' --no-pager"
+
+    print_stage_header(
+        3, "Root-cause analysis", "magenta",
+        "Pulls designate-central and designate-worker journal logs from the test window, "
+        "then uses Ollama to correlate logs with the test intent and failure traceback.",
+        [llm_stage_line(), f"Logs since: {start_time}"],
+    )
+
+    cmd = (
+        "sudo journalctl -u devstack@designate-central.service "
+        "-u devstack@designate-worker.service "
+        f"--since '{start_time}' --no-pager"
+    )
     try:
         logs = subprocess.check_output(cmd, shell=True).decode('utf-8')
         with open(log_file, "w") as f:
@@ -286,19 +334,25 @@ def run_stage_root_cause(logic, trace, start_time, run_dir):
     task = Task(
         description=(
             f"FINAL INVESTIGATION:\n\n"
-            f"THE TEST INTENT (from Stage 1):\n{logic}\n\n"
-            f"THE TRACEBACK (from Stage 2):\n{trace}\n\n"
+            f"TEST INTENT:\n{logic}\n\n"
+            f"FAILURE / TRACEBACK:\n{trace}\n\n"
             f"DESIGNATE LOGS:\n{logs[-12000:]}\n\n"
-            "Explain exactly why the backend failed to meet the test expectations. Pinpoint the specific service (Central/Worker) and the error."
+            "Explain why the backend failed. Name the service (Central/Worker) and the error. "
+            "Plain prose only — no JSON, no tool-call syntax."
         ),
-        expected_output="Comprehensive Root Cause Verdict.",
+        expected_output="Root cause verdict in plain language.",
         agent=analyst
     )
-    result = Crew(agents=[analyst], tasks=[task]).kickoff()
-    return str(result)
+    result = run_crew_task(task)
+    print_result_panel("Root cause verdict", result, "magenta")
+    return result
 
 
 # --- MAIN ---
+
+def llm_stage_line() -> str:
+    return f"Ollama ({OLLAMA_MODEL}) @ {OLLAMA_BASE}"
+
 
 def get_full_test_list(grep_str=None):
     """Return (tests, error). error is set when stestr discovery fails."""
@@ -336,58 +390,54 @@ def prompt_test_selection(tests):
 
 
 if __name__ == "__main__":
-    console.print(Panel("[bold green]DESIGNATE E2E SYSTEM-AWARE INVESTIGATOR[/bold green]"))
-    console.print(f"[dim]LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE}[/dim]")
+    console.print(Panel(
+        Text.from_markup(
+            "[bold green]Designate E2E Test Investigator[/bold green]\n"
+            "Select a Tempest test → analyze intent → run → diagnose failures"
+        ),
+        border_style="green",
+    ))
+    console.print(rich_text(f"LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE}"), justify="left")
 
     llm_ok, llm_error = verify_llm_connection(OLLAMA_BASE)
     if not llm_ok:
-        console.print("[red]Ollama is not reachable — AI stages cannot run:[/red]")
-        console.print(Panel(Text(llm_error, style="red"), border_style="red"))
+        print_result_panel("Startup error", llm_error, "red")
         sys.exit(1)
 
     cfg_ok, cfg_msg = verify_tempest_config()
     if not cfg_ok:
-        console.print("[red]Tempest config missing — stestr run will fail without credentials:[/red]")
-        console.print(Panel(Text(cfg_msg, style="red"), border_style="red"))
+        print_result_panel("Startup error", cfg_msg, "red")
         sys.exit(1)
-    console.print(f"[dim]Tempest config: {cfg_msg}[/dim]")
+    console.print(rich_text(f"Tempest config: {cfg_msg}"), style="dim")
 
     grep_query = input("Grep tests (e.g. 'multipool') or ENTER for all: ").strip()
     tests, stestr_error = get_full_test_list(grep_query)
 
     if stestr_error:
-        console.print("[red]stestr list failed — Tempest test discovery is broken:[/red]")
-        console.print(Panel(Text(stestr_error, style="red"), border_style="red"))
+        print_result_panel("Test discovery failed", stestr_error, "red")
         sys.exit(1)
 
     if not tests:
         label = f"'{grep_query}'" if grep_query else "designate tests"
-        console.print(f"[red]No tests found matching {label}.[/red]")
+        console.print(rich_text(f"No tests found matching {label}."), style="red")
         sys.exit(1)
 
+    console.print()
+    console.print("[bold]Available tests[/bold] [dim](grep filter applied)[/dim]" if grep_query else "[bold]Available tests[/bold]")
     for i, t in enumerate(tests):
-        print(f"[{i}] {t}")
+        console.print(Text.assemble((f"{i:>3}  ", "dim cyan"), (t, "white")))
 
     target_test = prompt_test_selection(tests)
-    console.print(f"\n[bold]Selected:[/bold] {target_test}")
+    print_result_panel("Selected test", target_test, "blue")
 
     logic_summary = run_stage_logic_discovery(target_test)
     status, detail, start_time, run_dir = run_stage_execution(target_test)
 
-    if status == "SKIP":
-        console.print(
-            "\n[dim]Test was skipped — no backend failure to investigate. "
-            "Fix the skip reason above and re-run.[/dim]"
-        )
-    elif status == "NOT_RUN":
-        console.print(
-            "\n[dim]Test never executed — no Designate logs to analyze. "
-            "Fix the stestr error above and re-run.[/dim]"
-        )
-    elif status == "FAIL":
-        final_verdict = run_stage_root_cause(logic_summary, detail, start_time, run_dir)
-        console.print("\n")
-        console.print(
-            Panel(Text(str(final_verdict), style="green"), title="✅ FINAL ROOT CAUSE VERDICT", border_style="green"))
+    if status == "FAIL":
+        run_stage_root_cause(logic_summary, detail, start_time, run_dir)
+    elif status == "PASS":
+        console.print("\n[bold green]Done — test passed, no further analysis needed.[/bold green]")
     else:
-        console.print("\n[bold green]Success: test passed.[/bold green]")
+        console.print(
+            "\n[dim]Done — test did not run to completion; fix the issue above and re-run.[/dim]"
+        )
