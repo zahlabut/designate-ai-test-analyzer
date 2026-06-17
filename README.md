@@ -324,6 +324,8 @@ python3 main.py
    - **Stage 2: Execution** — runs `stestr run <test>`, saves output to `/opt/stack/agent_runs/run_<timestamp>/`.
    - **Stage 3: Root cause** (on failure only) — fetches `journalctl` logs and produces a technical verdict.
 
+If the test is **skipped** (e.g. missing test data file), Stage 2 prints the skip reason and Stage 3 is not run.
+
 ---
 
 ## Project structure

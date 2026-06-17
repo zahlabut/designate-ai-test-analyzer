@@ -2,7 +2,6 @@ import subprocess
 import os
 import sys
 import re
-import time
 import importlib.util
 import urllib.error
 import urllib.request
@@ -48,6 +47,7 @@ def verify_llm_connection(base_url):
 OLLAMA_BASE, OLLAMA_MODEL = configure_llm()
 
 TEMPEST_PATH = "/opt/stack/tempest"
+STESTR_BIN = os.environ.get("STESTR", "/opt/stack/data/venv/bin/stestr")
 BASE_HISTORY_DIR = "/opt/stack/agent_runs"
 
 SYSTEM_CONTEXT = """
@@ -100,6 +100,46 @@ analyst = Agent(
 
 # --- STAGE HANDLERS ---
 
+def parse_tempest_result(output: str, returncode: int) -> tuple[str, str]:
+    """Return (status, detail). status is PASS, FAIL, or SKIP."""
+    skip_match = re.search(r"SKIPPED:\s*(.+)", output)
+    totals = {
+        name: int(m.group(1))
+        for name, m in (
+            ("failed", re.search(r"Failed:\s*(\d+)", output)),
+            ("skipped", re.search(r"Skipped:\s*(\d+)", output)),
+            ("passed", re.search(r"Passed:\s*(\d+)", output)),
+        )
+        if m
+    }
+
+    failed = totals.get("failed", 0)
+    skipped = totals.get("skipped", 0)
+    passed = totals.get("passed", 0)
+    skip_reason = skip_match.group(1).strip() if skip_match else "unknown skip reason"
+
+    if skipped > 0 and failed == 0 and passed == 0:
+        return "SKIP", skip_reason
+
+    if failed > 0:
+        if "Captured traceback:" in output:
+            detail = output.split("Captured traceback:")[-1].split("Captured pythonlogging:")[0].strip()
+        else:
+            detail = output[-4000:].strip() or f"stestr exited with code {returncode}"
+        return "FAIL", detail
+
+    if passed > 0:
+        return "PASS", ""
+
+    if skip_match:
+        return "SKIP", skip_reason
+
+    if returncode != 0:
+        return "FAIL", output[-4000:].strip() or f"stestr exited with code {returncode}"
+
+    return "PASS", ""
+
+
 def run_stage_logic_discovery(test_path):
     console.print(f"\n[bold blue]🔎 STAGE 1: ANALYZING TEST LOGIC...[/bold blue]")
     task = Task(
@@ -128,15 +168,20 @@ def run_stage_execution(test_path):
     run_dir = os.path.join(BASE_HISTORY_DIR, f"run_{ts}")
     os.makedirs(run_dir, exist_ok=True)
 
-    clean_test = test_path.split('[')[0]
     output_log = os.path.join(run_dir, "tempest_run.log")
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     console.print(f"\n[bold yellow]🚀 STAGE 2: EXECUTING FRESH TEST RUN...[/bold yellow]")
+    console.print(f"[dim]stestr run --serial {test_path}[/dim]")
 
-    process = subprocess.Popen(f"stestr run '{clean_test}'", shell=True,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               cwd=TEMPEST_PATH, text=True, bufsize=1)
+    process = subprocess.Popen(
+        [STESTR_BIN, "run", "--serial", test_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        cwd=TEMPEST_PATH,
+        text=True,
+        bufsize=1,
+    )
 
     full_output = []
     with open(output_log, "w") as f:
@@ -149,17 +194,20 @@ def run_stage_execution(test_path):
 
     process.wait()
     output_str = "".join(full_output)
-    status = "PASS" if process.returncode == 0 else "FAIL"
+    status, detail = parse_tempest_result(output_str, process.returncode)
 
-    trace = "No failure."
-    if status == "FAIL" and "Captured traceback:" in output_str:
-        trace = output_str.split("Captured traceback:")[-1].split("Captured pythonlogging:")[0].strip()
+    if status == "PASS":
+        console.print(f"\n[bold green]Result: PASS[/bold green]")
+    elif status == "SKIP":
+        console.print(f"\n[bold yellow]Result: SKIPPED[/bold yellow]")
+        console.print(Panel(Text(detail, style="yellow"), title="Skip reason", border_style="yellow"))
+    else:
+        console.print(f"\n[bold red]Result: FAIL[/bold red]")
 
-    color = "green" if status == "PASS" else "red"
-    console.print(f"\n[bold {color}]Result: {status}[/bold {color}]")
     console.print(f"[dim]Artifacts folder: {run_dir}[/dim]")
+    console.print(f"[dim]Full log: {output_log}[/dim]")
 
-    return status, trace, start_time, run_dir
+    return status, detail, start_time, run_dir
 
 
 def run_stage_root_cause(logic, trace, start_time, run_dir):
@@ -194,7 +242,7 @@ def run_stage_root_cause(logic, trace, start_time, run_dir):
 def get_full_test_list(grep_str=None):
     """Return (tests, error). error is set when stestr discovery fails."""
     list_result = subprocess.run(
-        ["stestr", "list"],
+        [STESTR_BIN, "list"],
         cwd=TEMPEST_PATH,
         capture_output=True,
         text=True,
@@ -255,12 +303,17 @@ if __name__ == "__main__":
     console.print(f"\n[bold]Selected:[/bold] {target_test}")
 
     logic_summary = run_stage_logic_discovery(target_test)
-    status, traceback, start_time, run_dir = run_stage_execution(target_test)
+    status, detail, start_time, run_dir = run_stage_execution(target_test)
 
-    if status == "FAIL":
-        final_verdict = run_stage_root_cause(logic_summary, traceback, start_time, run_dir)
+    if status == "SKIP":
+        console.print(
+            "\n[dim]Test was skipped — no backend failure to investigate. "
+            "Fix the skip reason above and re-run.[/dim]"
+        )
+    elif status == "FAIL":
+        final_verdict = run_stage_root_cause(logic_summary, detail, start_time, run_dir)
         console.print("\n")
         console.print(
             Panel(Text(str(final_verdict), style="green"), title="✅ FINAL ROOT CAUSE VERDICT", border_style="green"))
     else:
-        console.print("\n[bold green]Success: Backend matches code intent.[/bold green]")
+        console.print("\n[bold green]Success: test passed.[/bold green]")
