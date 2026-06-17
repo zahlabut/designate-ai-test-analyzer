@@ -27,7 +27,7 @@ When you run `main.py`, the CLI prints this pipeline before test selection:
 | **Setup** | Verify Ollama and `tempest.conf`; discover tests with `stestr list` (optional grep); pick one by index |
 | **Stage 1** | Ollama calls `read_source` to load the test method, then explains what it checks and expected Designate behavior |
 | **Stage 2** | Runs `stestr run --serial` against DevStack; full output saved under `/opt/stack/agent_runs/run_<timestamp>/` |
-| **Stage 3** | **FAIL only** — pulls `designate-central` and `designate-worker` journal logs from the run window; Ollama correlates logs with the traceback and Stage 1 intent |
+| **Stage 3** | **FAIL only** — pulls journal logs from **all Designate services** (api, central, producer, worker, mdns) from the run window; Ollama correlates logs with the traceback and Stage 1 intent |
 
 **Stage 2 outcomes:** PASS or SKIP → done · FAIL → Stage 3
 
@@ -342,7 +342,7 @@ python3 main.py
 | Requirement | Notes |
 |-------------|-------|
 | VM sizing | See [hardware requirements](#vm-hardware-requirements-devstack--ollama-on-same-host) — **16 GiB RAM** minimum for local small model |
-| DevStack with Designate | DNS enabled, central + worker running |
+| DevStack with Designate | DNS enabled; api, central, producer, worker, and mdns running |
 | DevStack venv | `source /opt/stack/data/venv/bin/activate` before `stestr` and `main.py` |
 | `designate-tempest-plugin` | Installed in Tempest environment |
 | `stestr list` working | See crypto fix in step 3 if discovery fails |

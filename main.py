@@ -52,13 +52,25 @@ TEMPEST_CONFIG = os.environ.get("TEMPEST_CONFIG", "/opt/stack/tempest/etc/tempes
 STESTR_BIN = os.environ.get("STESTR", "/opt/stack/data/venv/bin/stestr")
 BASE_HISTORY_DIR = "/opt/stack/agent_runs"
 
+# DevStack designate units (fallback when systemctl discovery finds none)
+DESIGNATE_SERVICES = (
+    "designate-api",
+    "designate-central",
+    "designate-producer",
+    "designate-worker",
+    "designate-mdns",
+)
+
 SYSTEM_CONTEXT = """
 Environment: OpenStack DevStack (All-in-one).
 Service: Designate (DNS-as-a-Service) with DNS enabled.
 Testing Tool: Tempest with designate-tempest-plugin.
 Architecture:
+- API: REST interface for clients.
 - Central: Logic/DB/Pool coordination.
+- Producer: Periodic tasks and zone transfers.
 - Worker: Backend sync (BIND9/PowerDNS).
+- mDNS: Multicast DNS integration.
 """
 
 
@@ -214,6 +226,40 @@ def parse_tempest_result(output: str, returncode: int) -> tuple[str, str]:
     return "PASS", ""
 
 
+def designate_journal_units() -> list[str]:
+    """Return devstack@designate*.service units on this host."""
+    try:
+        out = subprocess.check_output(
+            [
+                "systemctl", "list-units", "--all",
+                "--no-legend", "--no-pager",
+                "devstack@designate*.service",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        units = [line.split()[0] for line in out.splitlines() if line.strip()]
+        if units:
+            return sorted(set(units))
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.SubprocessError):
+        pass
+    return [f"devstack@{name}.service" for name in DESIGNATE_SERVICES]
+
+
+def designate_service_names(units: list[str]) -> str:
+    return ", ".join(u.removeprefix("devstack@").removesuffix(".service") for u in units)
+
+
+def fetch_designate_logs(since: str) -> str:
+    units = designate_journal_units()
+    unit_flags = " ".join(f"-u {u}" for u in units)
+    cmd = f"sudo journalctl {unit_flags} --since '{since}' --no-pager"
+    try:
+        return subprocess.check_output(cmd, shell=True).decode("utf-8")
+    except subprocess.CalledProcessError:
+        return "No backend logs found."
+
+
 def run_stage_logic_discovery(test_path):
     print_stage_header(
         1, "Analyze test logic", "cyan",
@@ -311,33 +357,28 @@ def run_stage_execution(test_path):
 
 def run_stage_root_cause(logic, trace, start_time, run_dir):
     log_file = os.path.join(run_dir, "designate_services.log")
+    units = designate_journal_units()
+    service_list = designate_service_names(units)
 
     print_stage_header(
         3, "Root-cause analysis", "magenta",
-        "Pulls designate-central and designate-worker journal logs from the test window, "
+        "Pulls journal logs from all Designate services from the test window, "
         "then uses Ollama to correlate logs with the test intent and failure traceback.",
-        [llm_stage_line(), f"Logs since: {start_time}"],
+        [llm_stage_line(), f"Logs since: {start_time}", f"Services: {service_list}"],
     )
 
-    cmd = (
-        "sudo journalctl -u devstack@designate-central.service "
-        "-u devstack@designate-worker.service "
-        f"--since '{start_time}' --no-pager"
-    )
-    try:
-        logs = subprocess.check_output(cmd, shell=True).decode('utf-8')
-        with open(log_file, "w") as f:
-            f.write(logs)
-    except:
-        logs = "No backend logs found."
+    logs = fetch_designate_logs(start_time)
+    with open(log_file, "w") as f:
+        f.write(logs)
 
     task = Task(
         description=(
             f"FINAL INVESTIGATION:\n\n"
             f"TEST INTENT:\n{logic}\n\n"
             f"FAILURE / TRACEBACK:\n{trace}\n\n"
-            f"DESIGNATE LOGS:\n{logs[-12000:]}\n\n"
-            "Explain why the backend failed. Name the service (Central/Worker) and the error. "
+            f"DESIGNATE LOGS (all services: {service_list}):\n{logs[-12000:]}\n\n"
+            "Explain why the backend failed. Name the failing Designate service "
+            "(api, central, producer, worker, mdns) and the error. "
             "Plain prose only — no JSON, no tool-call syntax."
         ),
         expected_output="Root cause verdict in plain language.",
