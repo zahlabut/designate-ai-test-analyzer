@@ -28,6 +28,17 @@ Autonomous diagnostic agent for OpenStack Designate Tempest failures. It reads t
 | **Stage 3** | **FAIL only** — log evidence report per service + Ollama root-cause verdict |
 | **Summary** | Closing recap: test, brief intent, PASS/FAIL, root cause if failed |
 
+### Example output
+
+Full terminal-style captures from a DevStack run (grep `prop`, propagation tests):
+
+| Outcome | Example |
+|---------|---------|
+| **PASS** — Stage 3 skipped | [examples/example-pass.html](examples/example-pass.html) — `test_update_records_propagated_to_backends_07_MX_under_APEX` |
+| **FAIL** — Stage 3 root-cause analysis | [examples/example-fail.html](examples/example-fail.html) — `test_update_records_propagated_to_backends_14_NAPTR_Record` (wrong nameserver port in `tempest.conf`) |
+
+Open the HTML files in a browser or click them on GitHub to browse the staged output.
+
 ---
 
 ## VM requirements
@@ -141,4 +152,6 @@ The tool creates `/etc/tempest/tempest.conf` → DevStack config if missing (`su
 | `conf.ini` | All tool settings (Ollama, Tempest paths, artifact directory) |
 | `main.py` | Stage orchestration and CLI |
 | `requirements.txt` | Python dependencies |
+| `examples/example-pass.html` | Sample PASS run output |
+| `examples/example-fail.html` | Sample FAIL run output (with Stage 3) |
 | `/opt/stack/agent_runs/run_<timestamp>/` | `tempest_run.log`, `log_evidence.txt`, `designate_logs/*.log` |
