@@ -28,7 +28,6 @@ from datetime import datetime
 
 # CrewAI: framework that sends tasks to the local LLM (Ollama) and optional tools.
 from crewai import Agent, Task, Crew
-from crewai.tools import tool
 
 # Rich: pretty coloured panels and text in the terminal (better than plain print).
 from rich.console import Console
@@ -502,17 +501,13 @@ def save_service_logs(run_dir: str, service_logs: dict[str, str]) -> None:
             f.write(log or "")
 
 
-# --- CREWAI TOOL ---
-# A small function the LLM can call to read test source (see read_source below).
+# --- LEGACY SOURCE READER (unused) ---
+# Stage 1 uses load_test_source_bundle() instead. Kept as reference for reading
+# a single test method from disk without the LLM.
 
 
-@tool("read_source")
-def read_source(test_path: str):
-    """
-    CrewAI tool (optional): lets the agent read a single test method from disk.
-    Stage 1 mainly uses load_test_source_bundle() instead, but this tool remains
-    available if the agent needs to look up code on its own.
-    """
+def read_source_file(test_path: str) -> str:
+    """Read one test method from the plugin (not used by CrewAI anymore)."""
     try:
         clean_path = test_path.split('[')[0]
         parts = clean_path.split('.')
@@ -551,6 +546,7 @@ def get_analyst() -> Agent:
     """
     Why: The agent must be created only after the user picks an Ollama model.
     What: Builds the Designate Expert agent once, reuses it for Stage 1 and Stage 3.
+          No tools — Stage 1 source is pre-loaded; Stage 3 uses log evidence only.
     """
     global _analyst
     if _analyst is None:
@@ -558,7 +554,7 @@ def get_analyst() -> Agent:
             role='Designate Expert Architect',
             goal='Explain and troubleshoot Designate E2E tests with clear, accurate technical summaries.',
             backstory=f'You are an expert troubleshooter in this environment: {SYSTEM_CONTEXT}.',
-            tools=[read_source],
+            tools=[],
             verbose=False,
             allow_delegation=False,
         )
@@ -807,16 +803,16 @@ def run_stage_logic_discovery(test_path):
 
     task = Task(
         description=(
-            f"Analyze this Tempest test source (test method + helpers it calls):\n\n"
+            f"The complete Python source for this Tempest test is already provided below "
+            f"(test method + helpers). Do NOT call tools. Do NOT output JSON.\n\n"
             f"{source_bundle}\n\n"
-            "Explain step-by-step what the test does end-to-end. Include:\n"
+            "Write a step-by-step explanation of what this test does end-to-end:\n"
             "- Setup (zones, recordsets, API calls)\n"
             "- DNS / propagation checks (dig, nameservers, ports)\n"
             "- Waits, assertions, and expected Designate behavior\n"
-            "Base the narrative ONLY on the source above — do not guess or invent steps. "
-            "Plain prose only — no JSON, no tool-call syntax."
+            "Use only the source above. Plain English prose — no JSON, no tool syntax."
         ),
-        expected_output="Complete step-by-step breakdown of the test flow.",
+        expected_output="Complete step-by-step breakdown of the test flow in plain prose.",
         agent=get_analyst(),
     )
     result = run_crew_task(task)
