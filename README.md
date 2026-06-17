@@ -41,43 +41,12 @@ This setup runs **DevStack** and **Ollama in Podman** (`llama3.2:1b`) on the sam
 
 | Resource | Size | Why |
 |----------|------|-----|
-| **RAM** | **16 GiB** | DevStack + model + headroom (see budget below) |
+| **RAM** | **16 GiB** | DevStack + Ollama (`llama3.2:1b`) + headroom |
 | **vCPU** | **4** | DevStack services; LLM inference is slow on 2 |
 | **Disk** | **80 GiB** | DevStack growth, one model (~1.3 GiB), logs/artifacts |
 | **Swap** | **8 GiB** | Buffer when RAM spikes during Tempest or model load |
 
 **Not recommended:** 8 GiB RAM — DevStack alone can use most of it; Ollama will fail to load the model.
-
-### RAM budget
-
-```
-DevStack (Designate, Neutron, MySQL, Nova, …)  →  6–8 GiB
-Podman + Ollama container                       →  ~0.5 GiB
-llama3.2:1b at runtime                          →  ~1.5–2 GiB
-OS + Tempest / agent headroom                   →  2–3 GiB
-────────────────────────────────────────────────────────────
-Total                                           →  ~12–14 GiB  →  use 16 GiB VM
-```
-
-Quick check on the VM:
-
-```bash
-free -h
-df -h /
-nproc
-```
-
-| Reading | Action |
-|---------|--------|
-| `MemAvailable` < 2 GiB with DevStack up | Too small — use a 16 GiB VM |
-| `SwapTotal` = 0 | Add 8 GiB swap |
-| Disk > 85% full | Expand disk before pulling the model |
-
-Model (fixed for this project):
-
-```bash
-export OLLAMA_MODEL=ollama/llama3.2:1b
-```
 
 ---
 
