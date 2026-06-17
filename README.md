@@ -65,16 +65,7 @@ cd /opt/stack/tempest
 stestr list | grep designate | head
 ```
 
-The analyzer uses `stestr` internally for discovery (`stestr list`) and execution (`stestr run --serial`) in Stage 2 — you do not need to run tests manually or escape `[id-...]` brackets yourself.
-
-DevStack writes credentials to `/opt/stack/tempest/etc/tempest.conf`. Without `TEMPEST_CONFIG`, `stestr` defaults to missing `/etc/tempest/tempest.conf` and fails with `Password is not defined`.
-
-One-time fix (optional — makes manual runs work without the export):
-
-```bash
-sudo mkdir -p /etc/tempest
-sudo ln -sf /opt/stack/tempest/etc/tempest.conf /etc/tempest/tempest.conf
-```
+The analyzer uses `stestr` internally for discovery and execution in Stage 2. On startup it also creates `/etc/tempest/tempest.conf` → DevStack config if missing (requires `sudo`).
 
 ### 2. Clone and install Python dependencies
 

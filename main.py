@@ -48,7 +48,9 @@ OLLAMA_BASE, OLLAMA_MODEL = configure_llm()
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
 TEMPEST_PATH = "/opt/stack/tempest"
-TEMPEST_CONFIG = os.environ.get("TEMPEST_CONFIG", "/opt/stack/tempest/etc/tempest.conf")
+DEVSTACK_TEMPEST_CONF = "/opt/stack/tempest/etc/tempest.conf"
+SYSTEM_TEMPEST_CONF = "/etc/tempest/tempest.conf"
+TEMPEST_CONFIG = os.environ.get("TEMPEST_CONFIG", DEVSTACK_TEMPEST_CONF)
 STESTR_BIN = os.environ.get("STESTR", "/opt/stack/data/venv/bin/stestr")
 BASE_HISTORY_DIR = "/opt/stack/agent_runs"
 
@@ -327,18 +329,48 @@ def tempest_env() -> dict[str, str]:
     return env
 
 
+def ensure_tempest_conf_symlink() -> tuple[bool, str, bool]:
+    """Create /etc/tempest/tempest.conf → DevStack path when missing. Returns (ok, path_or_error, created)."""
+    if os.path.isfile(SYSTEM_TEMPEST_CONF):
+        return True, SYSTEM_TEMPEST_CONF, False
+    if not os.path.isfile(DEVSTACK_TEMPEST_CONF):
+        return False, f"DevStack tempest.conf not found at {DEVSTACK_TEMPEST_CONF}", False
+    try:
+        subprocess.run(
+            ["sudo", "mkdir", "-p", "/etc/tempest"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["sudo", "ln", "-sf", DEVSTACK_TEMPEST_CONF, SYSTEM_TEMPEST_CONF],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        err = (e.stderr or e.stdout or str(e)).strip()
+        return False, f"Could not create {SYSTEM_TEMPEST_CONF} symlink: {err}", False
+    if os.path.isfile(SYSTEM_TEMPEST_CONF):
+        return True, SYSTEM_TEMPEST_CONF, True
+    return False, f"Symlink created but {SYSTEM_TEMPEST_CONF} is still missing", False
+
+
 def verify_tempest_config() -> tuple[bool, str]:
-    if os.path.isfile(TEMPEST_CONFIG):
-        return True, TEMPEST_CONFIG
-    fallback = "/etc/tempest/tempest.conf"
-    if os.path.isfile(fallback):
-        return True, fallback
-    return False, (
-        f"Tempest config not found at {TEMPEST_CONFIG}.\n"
-        "DevStack creates it at /opt/stack/tempest/etc/tempest.conf — set:\n"
-        "  export TEMPEST_CONFIG=/opt/stack/tempest/etc/tempest.conf\n"
-        "Or symlink: sudo ln -sf /opt/stack/tempest/etc/tempest.conf /etc/tempest/tempest.conf"
-    )
+    if not os.path.isfile(TEMPEST_CONFIG) and not os.path.isfile(DEVSTACK_TEMPEST_CONF):
+        return False, (
+            f"Tempest config not found at {TEMPEST_CONFIG}.\n"
+            f"Expected DevStack config at {DEVSTACK_TEMPEST_CONF}."
+        )
+
+    ok, path_or_err, created = ensure_tempest_conf_symlink()
+    if not ok and not os.path.isfile(TEMPEST_CONFIG):
+        return False, path_or_err
+
+    config = TEMPEST_CONFIG if os.path.isfile(TEMPEST_CONFIG) else path_or_err
+    if created:
+        return True, f"{config} (created symlink {SYSTEM_TEMPEST_CONF})"
+    return True, config
 
 
 def stestr_run_filter(test_id: str) -> str:
