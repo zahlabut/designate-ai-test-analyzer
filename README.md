@@ -30,14 +30,16 @@ Autonomous diagnostic agent for OpenStack Designate Tempest failures. It reads t
 
 ### Example output
 
-Full terminal-style captures from a DevStack run (grep `prop`, propagation tests):
+Rendered in the browser via **GitHub Pages** (repo links show raw HTML source — use these instead):
 
 | Outcome | Example |
 |---------|---------|
-| **PASS** — Stage 3 skipped | [examples/example-pass.html](examples/example-pass.html) — `test_update_records_propagated_to_backends_07_MX_under_APEX` |
-| **FAIL** — Stage 3 root-cause analysis | [examples/example-fail.html](examples/example-fail.html) — `test_update_records_propagated_to_backends_14_NAPTR_Record` (wrong nameserver port in `tempest.conf`) |
+| **PASS** — Stage 3 skipped | [example-pass.html](https://zahlabut.github.io/designate-ai-test-analyzer/example-pass.html) — `test_update_records_propagated_to_backends_07_MX_under_APEX` |
+| **FAIL** — Stage 3 root-cause analysis | [example-fail.html](https://zahlabut.github.io/designate-ai-test-analyzer/example-fail.html) — `test_update_records_propagated_to_backends_14_NAPTR_Record` (wrong nameserver port in `tempest.conf`) |
 
-Open the HTML files in a browser or click them on GitHub to browse the staged output.
+All examples: [zahlabut.github.io/designate-ai-test-analyzer/](https://zahlabut.github.io/designate-ai-test-analyzer/)
+
+**One-time setup (repo owner):** GitHub → Settings → Pages → Build and deployment → Source: **GitHub Actions**. Push to `master` runs `.github/workflows/pages.yml` and publishes the `docs/` folder.
 
 ---
 
@@ -152,6 +154,6 @@ The tool creates `/etc/tempest/tempest.conf` → DevStack config if missing (`su
 | `conf.ini` | All tool settings (Ollama, Tempest paths, artifact directory) |
 | `main.py` | Stage orchestration and CLI |
 | `requirements.txt` | Python dependencies |
-| `examples/example-pass.html` | Sample PASS run output |
-| `examples/example-fail.html` | Sample FAIL run output (with Stage 3) |
+| `docs/` | GitHub Pages site — rendered example output (`index.html`, `example-pass.html`, `example-fail.html`) |
+| `.github/workflows/pages.yml` | Publishes `docs/` to GitHub Pages on push to `master` |
 | `/opt/stack/agent_runs/run_<timestamp>/` | `tempest_run.log`, `log_evidence.txt`, `designate_logs/*.log` |
