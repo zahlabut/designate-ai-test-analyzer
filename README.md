@@ -4,6 +4,8 @@ Autonomous diagnostic agent for OpenStack Designate Tempest failures. It reads t
 
 **Stack:** CrewAI + Ollama (Podman) + Rich CLI
 
+**Architecture:** [Agentic AI design & code structure](https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/architecture.html) (CrewAI agent, tasks, pipeline, `main.py` layout)
+
 ---
 
 ## Tool flow
@@ -164,5 +166,7 @@ The tool creates `/etc/tempest/tempest.conf` → DevStack config if missing (`su
 | `conf.ini` | All tool settings (Ollama, Tempest paths, artifact directory) |
 | `main.py` | Stage orchestration and CLI |
 | `requirements.txt` | Python dependencies |
-| `docs/` | Example output HTML (linked from README via htmlpreview; optional GitHub Pages from `/docs`) |
+| `docs/architecture.html` | Agentic AI architecture (CrewAI agent, tasks, code structure) |
+| `docs/example-pass.html` | Sample PASS run output |
+| `docs/example-fail.html` | Sample FAIL run output (with Stage 3) |
 | `/opt/stack/agent_runs/run_<timestamp>/` | `tempest_run.log`, `log_evidence.txt`, `designate_logs/*.log` |

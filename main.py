@@ -2,15 +2,14 @@
 Designate E2E Test Investigator
 ================================
 
-This script helps debug failing OpenStack Designate Tempest tests on a DevStack VM.
+Agentic-AI CLI for debugging failing Designate Tempest tests on DevStack.
+Combines deterministic orchestration (stestr, journalctl, source parsing) with
+LLM reasoning (CrewAI + Ollama) in a fixed pipeline.
 
-High-level flow:
-  1. Setup  — check Ollama + Tempest config, list tests, user picks one
-  2. Stage 1 — read test source code, LLM explains what the test does
-  3. Stage 2 — run the test with stestr (no LLM)
-  4. Stage 3 — on FAIL only: collect logs, LLM suggests root cause
+Run: ``python3 main.py``  (settings in ``conf.ini``)
 
-Run: python3 main.py  (settings in conf.ini next to this file)
+Architecture (agents, tasks, code structure):
+  docs/architecture.html — linked from README
 """
 
 # --- IMPORTS ---

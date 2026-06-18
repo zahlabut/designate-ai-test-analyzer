@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agentic AI architecture — Designate AI Test Analyzer</title>
+  <style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --dim: #8b949e;
+  --cyan: #39c5cf;
+  --yellow: #d29922;
+  --green: #3fb950;
+  --red: #f85149;
+  --magenta: #bc8cff;
+  --white: #f0f6fc;
+  --code-bg: #21262d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 1.5rem;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.page-header {
+  max-width: 1100px;
+  margin: 0 auto 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-header h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--white);
+}
+
+.meta { margin: 0.25rem 0; }
+.meta.dim { color: var(--dim); font-size: 12px; }
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.badge.pass { background: rgba(63, 185, 80, 0.2); color: var(--green); }
+.badge.fail { background: rgba(248, 81, 73, 0.2); color: var(--red); }
+
+.nav-links {
+  max-width: 1100px;
+  margin: 0 auto 1rem;
+  font-size: 12px;
+}
+
+.nav-links a {
+  color: var(--cyan);
+  text-decoration: none;
+  margin-right: 1rem;
+}
+
+.nav-links a:hover { text-decoration: underline; }
+
+.terminal {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+}
+
+.panel-title {
+  padding: 0.35rem 0.75rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.panel-body {
+  padding: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.panel-header .panel-title { color: var(--white); }
+.panel-cyan .panel-title { color: var(--cyan); }
+.panel-yellow .panel-title { color: var(--yellow); }
+.panel-green .panel-title { color: var(--green); }
+.panel-red .panel-title { color: var(--red); }
+.panel-magenta .panel-title { color: var(--magenta); }
+.panel-summary .panel-title { color: var(--green); }
+.panel-summary.fail .panel-title { color: var(--red); }
+
+.diagram {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--dim);
+  line-height: 1.4;
+}
+
+.diagram .cyan { color: var(--cyan); }
+.diagram .yellow { color: var(--yellow); }
+.diagram .magenta { color: var(--magenta); }
+
+.line { margin: 0.15rem 0; }
+.line.dim { color: var(--dim); }
+.line.info { color: var(--text); }
+.line.ok { color: var(--green); }
+
+.list-tests {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.list-tests .selected { color: var(--cyan); font-weight: 600; }
+
+code {
+  background: var(--code-bg);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+footer {
+  max-width: 1100px;
+  margin: 2rem auto 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.cards {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  display: block;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.15s;
+}
+
+.card:hover {
+  border-color: var(--cyan);
+}
+
+.card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: var(--white);
+}
+
+.card p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.card.pass { border-left: 3px solid var(--green); }
+.card.fail { border-left: 3px solid var(--red); }
+.card.doc { border-left: 3px solid var(--cyan); }
+
+.doc-content {
+  max-width: 900px;
+  margin: 0 auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.doc-content h2 {
+  margin: 2rem 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--cyan);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.35rem;
+}
+
+.doc-content h2:first-child { margin-top: 0; }
+
+.doc-content h3 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.9rem;
+  color: var(--yellow);
+}
+
+.doc-content p { margin: 0.5rem 0; }
+
+.doc-content ul, .doc-content ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.doc-content li { margin: 0.35rem 0; }
+
+.doc-content a {
+  color: var(--cyan);
+  text-decoration: none;
+}
+
+.doc-content a:hover { text-decoration: underline; }
+
+.doc-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 12px;
+}
+
+.doc-content th, .doc-content td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.doc-content th {
+  background: var(--surface);
+  color: var(--white);
+}
+
+.doc-content .callout {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--magenta);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+
+.doc-content .tag {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.doc-content .tag.llm { background: rgba(188, 140, 255, 0.15); color: var(--magenta); }
+.doc-content .tag.det { background: rgba(57, 197, 207, 0.15); color: var(--cyan); }
+
+  </style>
+</head>
+<body>
+  <nav class="nav-links">
+    <a href="https://github.com/zahlabut/designate-ai-test-analyzer#readme">← README on GitHub</a>
+    <a href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/index.html">All docs</a>
+    <a href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/architecture.html">Architecture</a>
+    <a href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/example-pass.html">PASS example</a>
+    <a href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/zahlabut/designate-ai-test-analyzer/master/docs/example-fail.html">FAIL example</a>
+  </nav>
+
+  <header class="page-header">
+    <h1>Agentic AI architecture</h1>
+    <p class="meta">How CrewAI + Ollama are used in <code>main.py</code> — agents, tasks, and code structure.</p>
+    <p class="meta dim">Mirrors the module docstring at the top of <code>main.py</code>.</p>
+  </header>
+
+  <main class="doc-content">
+    <p>
+      <strong>Designate E2E Test Investigator</strong> is an agentic-AI CLI for debugging
+      failing Designate Tempest tests on DevStack. It combines
+      <span class="tag det">deterministic orchestration</span> (shell, stestr, journalctl,
+      source parsing) with <span class="tag llm">LLM reasoning</span> (CrewAI + local Ollama)
+      in a fixed pipeline.
+    </p>
+
+    <h2>Agentic AI design</h2>
+    <p>
+      This is <strong>agentic</strong> because a CrewAI <em>Agent</em> performs open-ended
+      reasoning at two points: test intent (Stage 1) and root-cause verdict (Stage 3).
+      It is <strong>not</strong> a multi-agent swarm — one agent, two tasks, no delegation,
+      no tool loop.
+    </p>
+
+    <table>
+      <tr><th>Component</th><th>Details</th></tr>
+      <tr>
+        <td>Framework</td>
+        <td><a href="https://github.com/crewAIInc/crewAI">CrewAI</a> — Agent / Task / Crew</td>
+      </tr>
+      <tr>
+        <td>LLM backend</td>
+        <td>Ollama (OpenAI-compatible API at <code>127.0.0.1:11434</code>); model chosen at startup (e.g. <code>ollama/llama3.2:1b</code>)</td>
+      </tr>
+      <tr>
+        <td>Config</td>
+        <td><code>conf.ini</code> sets <code>OPENAI_API_BASE</code> and <code>OPENAI_API_KEY</code> for CrewAI internally</td>
+      </tr>
+    </table>
+
+    <h3>Single agent — “Designate Expert Architect” (<code>get_analyst()</code>)</h3>
+    <table>
+      <tr><th>Property</th><th>Value</th></tr>
+      <tr><td><strong>role</strong></td><td>Designate Expert Architect</td></tr>
+      <tr><td><strong>goal</strong></td><td>Explain and troubleshoot Designate E2E tests with clear, accurate technical summaries</td></tr>
+      <tr><td><strong>backstory</strong></td><td>DevStack / Designate architecture context (<code>SYSTEM_CONTEXT</code> — API, Central, Producer, Worker, mDNS)</td></tr>
+      <tr><td><strong>tools</strong></td><td>none (<code>tools=[]</code>) — all context is injected into each Task description</td></tr>
+      <tr><td><strong>allow_delegation</strong></td><td>False — no sub-agents or hand-offs</td></tr>
+    </table>
+    <p>
+      Created <strong>lazily</strong> after model selection (<code>setup_ollama_model</code>),
+      cached in <code>_analyst</code>. <code>reset_analyst()</code> clears the cache when the model changes.
+    </p>
+
+    <h3>Tasks (same agent, one per LLM stage)</h3>
+
+    <p><strong>Stage 1 — <code>run_stage_logic_discovery</code></strong> <span class="tag llm">LLM</span></p>
+    <ul>
+      <li><strong>Input (deterministic):</strong> <code>load_test_source_bundle()</code> reads the test method and helper methods from designate-tempest-plugin source.</li>
+      <li><strong>Task description:</strong> full source + instructions to explain setup, DNS checks, waits, and expected Designate behaviour in plain prose.</li>
+      <li><strong>Output:</strong> test-intent summary (cyan panel).</li>
+    </ul>
+
+    <p><strong>Stage 3 — <code>run_stage_root_cause</code></strong> (FAIL only) <span class="tag llm">LLM</span></p>
+    <ul>
+      <li><strong>Input (deterministic):</strong> <code>build_log_evidence_report()</code> — Tempest DNS config, traceback, run log excerpts, per-service journal summaries (<code>designate-api</code>, <code>central</code>, <code>worker</code>, …).</li>
+      <li><strong>Task description:</strong> test intent + evidence + structured questions (client vs backend, which services errored, most likely root cause).</li>
+      <li><strong>Output:</strong> root-cause verdict (magenta panel).</li>
+    </ul>
+
+    <p>
+      Execution: <code>run_crew_task()</code> →
+      <code>Crew(agents=[get_analyst()], tasks=[task]).kickoff()</code>
+    </p>
+
+    <div class="callout">
+      <strong>Why no CrewAI tools?</strong> Early versions used a <code>read_source</code> tool;
+      the LLM often returned JSON tool-call syntax instead of prose. Source and logs are now
+      pre-loaded deterministically and pasted into the Task — the agent only writes analysis.
+    </div>
+
+    <p>
+      <strong>Hybrid logic:</strong> Stages 1 and 3 are LLM-assisted; Stage 2 is pure subprocess
+      (<code>stestr run --serial</code>). The closing run summary mixes deterministic hints
+      (<code>failure_context_hint</code>, <code>backend_logs_hint</code>) with extracted LLM text
+      (<code>summarize_intent</code>, <code>summarize_root_cause</code>).
+    </p>
+
+    <h2>Pipeline</h2>
+    <pre class="diagram">  Setup          Stage 1              Stage 2              Stage 3
+  ─────          ───────              ───────              ───────
+  Ollama ✓   →   <span class="cyan">Analyze logic</span>   →   <span class="yellow">Run test</span>   →   <span class="magenta">Root cause</span>
+  tempest ✓      (test source)      (stestr)            (journalctl)
+                   cyan · LLM          yellow              magenta · LLM
+                                        │
+                                        ├─ PASS  → done
+                                        ├─ SKIP  → done
+                                        └─ FAIL  → Stage 3</pre>
+
+    <ol>
+      <li><strong>Setup</strong> — Ollama health + model pick, <code>tempest.conf</code> check, grep/list tests</li>
+      <li><strong>Stage 1</strong> — load test source → CrewAI Task → test intent</li>
+      <li><strong>Stage 2</strong> — stestr run → PASS / FAIL / SKIP (no LLM)</li>
+      <li><strong>Stage 3</strong> — on FAIL: journalctl → evidence report → CrewAI Task → verdict</li>
+      <li><strong>Summary</strong> — brief recap + artifacts under <code>/opt/stack/agent_runs/run_&lt;ts&gt;/</code></li>
+    </ol>
+
+    <h2>Code structure (<code>main.py</code>)</h2>
+    <table>
+      <tr><th>Section</th><th>Key functions / files</th></tr>
+      <tr><td>CONFIGURATION</td><td><code>load_settings</code>, <code>init_globals_from_config</code>, <code>conf.ini</code></td></tr>
+      <tr><td>OLLAMA / LLM</td><td>model list, selection, <code>set_active_ollama_model</code></td></tr>
+      <tr><td>TEST SOURCE</td><td><code>load_test_source_bundle</code> — regex method extraction from plugin tree</td></tr>
+      <tr><td>LOG COLLECTION</td><td><code>fetch_designate_logs_by_service</code>, <code>build_log_evidence_report</code></td></tr>
+      <tr><td>CREWAI AGENT</td><td><code>get_analyst</code>, <code>reset_analyst</code>, <code>run_crew_task</code></td></tr>
+      <tr><td>TERMINAL UI</td><td>Rich panels: <code>print_stage_header</code>, <code>print_result_panel</code></td></tr>
+      <tr><td>TEMPEST / STESTR</td><td>discovery, <code>stestr_run_filter</code>, <code>parse_tempest_result</code></td></tr>
+      <tr><td>STAGE RUNNERS</td><td><code>run_stage_logic_discovery</code>, <code>run_stage_execution</code>, <code>run_stage_root_cause</code></td></tr>
+      <tr><td>CLI ENTRY POINT</td><td><code>main</code> block: setup → select test → run stages → summary</td></tr>
+    </table>
+
+    <h2>Artifacts per run</h2>
+    <ul>
+      <li><code>tempest_run.log</code> — full stestr output</li>
+      <li><code>log_evidence.txt</code> — structured report fed to Stage 3</li>
+      <li><code>designate_logs/*.log</code> — per-service journal excerpts</li>
+    </ul>
+  </main>
+
+  <footer>
+    <a href="https://github.com/zahlabut/designate-ai-test-analyzer">designate-ai-test-analyzer</a> on GitHub
+  </footer>
+</body>
+</html>
