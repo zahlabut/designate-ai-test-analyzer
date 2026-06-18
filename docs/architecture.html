@@ -341,25 +341,34 @@ footer {
       cached in <code>_analyst</code>. <code>reset_analyst()</code> clears the cache when the model changes.
     </p>
 
-    <h3>Tasks (same agent, one per LLM stage)</h3>
+    <h3>Pipeline stages (all three)</h3>
 
-    <p><strong>Stage 1 — <code>run_stage_logic_discovery</code></strong> <span class="tag llm">LLM</span></p>
+    <p><strong>Stage 1 — <code>run_stage_logic_discovery</code></strong> <span class="tag llm">LLM · CrewAI Task</span></p>
     <ul>
       <li><strong>Input (deterministic):</strong> <code>load_test_source_bundle()</code> reads the test method and helper methods from designate-tempest-plugin source.</li>
-      <li><strong>Task description:</strong> full source + instructions to explain setup, DNS checks, waits, and expected Designate behaviour in plain prose.</li>
+      <li><strong>CrewAI Task description:</strong> full source + instructions to explain setup, DNS checks, waits, and expected Designate behaviour in plain prose.</li>
       <li><strong>Output:</strong> test-intent summary (cyan panel).</li>
     </ul>
 
-    <p><strong>Stage 3 — <code>run_stage_root_cause</code></strong> (FAIL only) <span class="tag llm">LLM</span></p>
+    <p><strong>Stage 2 — <code>run_stage_execution</code></strong> <span class="tag det">no LLM · no agent</span></p>
+    <ul>
+      <li><strong>What it does:</strong> runs the selected test with <code>stestr run --serial</code> against DevStack — subprocess only, no CrewAI.</li>
+      <li><strong>Input:</strong> test id from user selection; <code>tempest.conf</code> credentials via <code>TEMPEST_CONFIG</code>.</li>
+      <li><strong>Output:</strong> PASS / FAIL / SKIP / NOT_RUN (yellow panel); saves <code>tempest_run.log</code> and artifact directory under <code>/opt/stack/agent_runs/run_&lt;ts&gt;/</code>.</li>
+      <li><strong>Branching:</strong> PASS or SKIP → run summary and done. FAIL → continues to Stage 3.</li>
+    </ul>
+
+    <p><strong>Stage 3 — <code>run_stage_root_cause</code></strong> <span class="tag llm">LLM · CrewAI Task</span> (FAIL only)</p>
     <ul>
       <li><strong>Input (deterministic):</strong> <code>build_log_evidence_report()</code> — Tempest DNS config, traceback, run log excerpts, per-service journal summaries (<code>designate-api</code>, <code>central</code>, <code>worker</code>, …).</li>
-      <li><strong>Task description:</strong> test intent + evidence + structured questions (client vs backend, which services errored, most likely root cause).</li>
+      <li><strong>CrewAI Task description:</strong> test intent (from Stage 1) + evidence + structured questions (client vs backend, which services errored, most likely root cause).</li>
       <li><strong>Output:</strong> root-cause verdict (magenta panel).</li>
     </ul>
 
     <p>
-      Execution: <code>run_crew_task()</code> →
-      <code>Crew(agents=[get_analyst()], tasks=[task]).kickoff()</code>
+      Stages 1 and 3 use the same agent via <code>run_crew_task()</code> →
+      <code>Crew(agents=[get_analyst()], tasks=[task]).kickoff()</code>.
+      Stage 2 never calls CrewAI.
     </p>
 
     <div class="callout">
@@ -369,8 +378,8 @@ footer {
     </div>
 
     <p>
-      <strong>Hybrid logic:</strong> Stages 1 and 3 are LLM-assisted; Stage 2 is pure subprocess
-      (<code>stestr run --serial</code>). The closing run summary mixes deterministic hints
+      <strong>Hybrid logic:</strong> only Stages 1 and 3 use the LLM; Stage 2 is pure subprocess.
+      The closing run summary mixes deterministic hints
       (<code>failure_context_hint</code>, <code>backend_logs_hint</code>) with extracted LLM text
       (<code>summarize_intent</code>, <code>summarize_root_cause</code>).
     </p>
